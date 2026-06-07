@@ -53,8 +53,8 @@ class ConversionRunners:
         # Resolve and validate paths at the boundary so later code never guesses
         # relative to a surprising working directory.
         input_dir = self._path_value(payload, "inputDir", "input path")
-        schema_path = self._path_value(payload, "schema path")
-        output_dir = self._path_value(payload, "output directory")
+        schema_path = self._path_value(payload, "schemaPath", "schema path")
+        output_dir = self._path_value(payload, "outputDir", "output directory")
         il2cpp_dump_path = self._path_value(
             payload,
             "il2cppDumpPath",
