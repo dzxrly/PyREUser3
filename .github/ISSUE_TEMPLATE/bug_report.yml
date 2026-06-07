@@ -1,0 +1,152 @@
+name: Bug Report / 问题报告
+description: Report a PyREUser3 bug or conversion failure / 反馈 PyREUser3 的错误或转换失败
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a PyREUser3 issue.
+        感谢反馈 PyREUser3 问题。
+
+        Please do not upload copyrighted game files directly. If a sample is necessary, provide the smallest safe reproduction data or describe the structure instead.
+        请不要直接上传受版权保护的游戏文件。如确实需要样例，请提供最小可复现的安全数据，或描述相关结构。
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-checks / 提交前确认
+      options:
+        - label: I have read the README and confirmed this is about PyREUser3, not about obtaining game dumps or RE_RSZ templates. / 我已阅读 README，并确认此问题与 PyREUser3 有关，而不是关于如何获取游戏 dump 或 RE_RSZ 模板。
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area / 影响范围
+      multiple: true
+      options:
+        - Python API
+        - CLI export
+        - CLI pack
+        - Web UI
+        - .user.3 -> JSON
+        - JSON -> .user.3
+        - Packaging / installation
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description / 问题描述
+      description: What happened? Please describe the incorrect behavior clearly.
+      placeholder: Describe the failure, wrong output, exception, or unexpected behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior / 预期行为
+      description: What did you expect PyREUser3 to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction Steps / 复现步骤
+      description: Provide the exact command, Python code, or Web UI steps needed to reproduce the issue.
+      placeholder: |
+        1. Run ...
+        2. Use schema ...
+        3. See error ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or Code / 命令或代码
+      description: Paste the minimal command or Python snippet that reproduces the issue.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: pyreuser3-version
+    attributes:
+      label: PyREUser3 Version / PyREUser3 版本
+      placeholder: e.g. 0.1.0, git commit hash, or editable install
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version / Python 版本
+      placeholder: e.g. Python 3.11.9
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System / 操作系统
+      placeholder: e.g. Windows 11, Ubuntu 24.04, macOS 15
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-source
+    attributes:
+      label: Installation Source / 安装来源
+      options:
+        - pip install pyreuser3
+        - Local source checkout
+        - Editable install
+        - Built wheel / sdist
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: game-context
+    attributes:
+      label: Game / Data Context / 游戏或数据上下文
+      description: Optional. Name the game/version only if it helps explain the issue.
+      placeholder: e.g. Monster Hunter Stories 3 demo data, custom test fixture
+    validations:
+      required: false
+
+  - type: textarea
+    id: schema-context
+    attributes:
+      label: Schema and Dump Context / 模板与 dump 信息
+      description: Describe the RE_RSZ schema JSON and il2cpp_dump.json source/version. Do not paste huge files.
+      placeholder: |
+        RE_RSZ schema:
+        il2cpp_dump:
+        Any custom magic values:
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Traceback / 日志或异常堆栈
+      description: Paste the full Python traceback, CLI output, or Web UI task log.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional Context / 补充信息
+      description: Add screenshots, reduced JSON snippets, or other context.
+    validations:
+      required: false

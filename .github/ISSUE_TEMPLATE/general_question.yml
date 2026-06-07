@@ -1,0 +1,45 @@
+name: General Question / 其他问题
+description: Ask a usage question or discuss PyREUser3 / 提问或讨论 PyREUser3
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For reproducible bugs, please use **Bug Report / 问题报告** instead.
+        可复现的错误请使用 **Bug Report / 问题报告** 模板。
+
+        PyREUser3 does not provide game files, RE_RSZ templates, or il2cpp dumps.
+        PyREUser3 不提供游戏文件、RE_RSZ 模板或 il2cpp dump。
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / 问题
+      description: What would you like to ask?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / 背景
+      description: Describe what you are trying to do and what you have already tried.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Related Area / 相关范围
+      options:
+        - Python API
+        - CLI
+        - Web UI
+        - Export
+        - Pack
+        - Installation
+        - Documentation
+        - Other
+    validations:
+      required: false
