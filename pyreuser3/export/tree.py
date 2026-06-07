@@ -1,4 +1,8 @@
-"""Object reference tree builder for parsed .user.3 instances."""
+"""Build compact object trees from flat RSZ instance tables.
+
+The tree builder follows object references from root instances, detects cycles, keeps
+unresolved references explicit, and automatically reduces depth for very dense files.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +10,22 @@ from typing import Any
 
 
 class ExporterTreeMixin:
-    """Mixin for resolving object references into compact JSON trees."""
+    """Resolve flat RSZ instance references into compact JSON object trees while preserving
+    unresolved links.
+    """
 
     def _count_reference_links(self, value: Any) -> int:
-        """Internal helper for count reference links."""
+        """Count reference links.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (Any): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            int: Integer decoded from input data, metadata, or the command-line option being parsed.
+        """
         if isinstance(value, dict):
             if "ref_instance_id" in value and isinstance(value["ref_instance_id"], int):
                 return 1
@@ -22,7 +38,18 @@ class ExporterTreeMixin:
         return 0
 
     def _collect_reference_ids(self, value: Any, out: set[int]) -> None:
-        """Internal helper for collect reference ids."""
+        """Collect reference ids.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (Any): Value to parse, normalize, compare, or serialize.
+            out (set[int]): Mutable collection being populated by the recursive helper.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+        """
         if isinstance(value, dict):
             if "ref_instance_id" in value and isinstance(value["ref_instance_id"], int):
                 out.add(value["ref_instance_id"])
@@ -39,7 +66,18 @@ class ExporterTreeMixin:
         idx_map: dict[int, dict[str, Any]],
         parsed_instances: list[dict[str, Any]],
     ) -> list[int]:
-        """Internal helper for infer roots when object table empty."""
+        """Infer roots when object table empty.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            idx_map (dict[int, dict[str, Any]]): Mapping used to resolve related metadata.
+            parsed_instances (list[dict[str, Any]]): Parsed RSZ instance table used for reference-tree construction.
+
+        Returns:
+            list[int]: Instance indexes collected from roots, references, or normalized JSON input.
+        """
         candidates = sorted(
             idx
             for idx, inst in idx_map.items()
@@ -52,7 +90,8 @@ class ExporterTreeMixin:
         for inst in parsed_instances:
             fields = inst.get("data", {}).get("fields")
             if isinstance(fields, dict):
-                # Keep instance references stable while parsing or packing data.
+                # Preserve instance numbering and reference identity; RSZ object links
+                # depend on these indexes remaining stable.
                 self._collect_reference_ids(fields, referenced)
 
         inferred = [idx for idx in candidates if idx not in referenced]
@@ -63,14 +102,26 @@ class ExporterTreeMixin:
     def _auto_pick_tree_depth(
         self, parsed_instances: list[dict[str, Any]], object_roots: list[int]
     ) -> int:
-        """Internal helper for auto pick tree depth."""
+        """Choose automatically pick tree depth.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            parsed_instances (list[dict[str, Any]]): Parsed RSZ instance table used for reference-tree construction.
+            object_roots (list[int]): Instance indexes that are reachable from the object-info table.
+
+        Returns:
+            int: Integer decoded from input data, metadata, or the command-line option being parsed.
+        """
         ref_links = 0
         for inst in parsed_instances:
             fields = inst.get("data", {}).get("fields")
             if isinstance(fields, dict):
                 ref_links += self._count_reference_links(fields)
 
-        # Keep instance references stable while parsing or packing data.
+        # Preserve instance numbering and reference identity; RSZ object links depend on
+        # these indexes remaining stable.
         complexity = max(len(parsed_instances), ref_links, len(object_roots) * 10)
         if complexity <= 1500:
             return 4
@@ -81,7 +132,17 @@ class ExporterTreeMixin:
         return 1
 
     def _simplify_value_object(self, value: Any) -> Any:
-        """Internal helper for simplify value object."""
+        """Simplify value object.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (Any): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            Any: Normalized value ready for the next parse, export, post-processing, or pack step.
+        """
         if isinstance(value, dict) and len(value) == 1 and "_Value" in value:
             return value["_Value"]
         return value
@@ -93,13 +154,27 @@ class ExporterTreeMixin:
         depth: int,
         visited: set[int],
     ) -> Any:
-        """Internal helper for resolve compact value."""
+        """Resolve compact value.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (Any): Value to parse, normalize, compare, or serialize.
+            idx_map (dict[int, dict[str, Any]]): Mapping used to resolve related metadata.
+            depth (int): Remaining recursive expansion depth for reference traversal.
+            visited (set[int]): Set of instance indexes already seen on the current traversal path.
+
+        Returns:
+            Any: Normalized value ready for the next parse, export, post-processing, or pack step.
+        """
         if isinstance(value, dict):
             if "ref_instance_id" in value and isinstance(value["ref_instance_id"], int):
                 target_idx = value["ref_instance_id"]
                 if depth <= 0:
                     return {"ref_instance_id": target_idx}
-                # Keep this implementation detail explicit.
+                # Keep a reference instead of expanding the target again to prevent
+                # infinite recursion in cyclic object graphs.
                 return self._build_compact_tree(
                     target_idx, idx_map, depth - 1, set(visited)
                 )
@@ -122,17 +197,34 @@ class ExporterTreeMixin:
         instance_info_map: dict[int, dict[str, Any]] | None = None,
         visited: set[int] | None = None,
     ) -> dict[str, Any]:
-        """Internal helper for build compact tree."""
+        """Build compact tree.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            idx (int): RSZ instance index being parsed, planned, or written.
+            idx_map (dict[int, dict[str, Any]]): Mapping used to resolve related metadata.
+            depth (int): Remaining recursive expansion depth for reference traversal.
+            instance_info_map (dict[int, dict[str, Any]] | None): Mapping used to resolve
+            related metadata.
+            visited (set[int] | None): Set of instance indexes already seen on the current traversal path.
+
+        Returns:
+            dict[str, Any]: JSON-compatible dictionary for API or conversion callers.
+        """
         if visited is None:
             visited = set()
         if idx in visited:
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             return {"Ref": {"ref_instance_id": idx, "cycle": True}}
         visited.add(idx)
 
         inst = idx_map.get(idx)
         if inst is None:
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             if instance_info_map is not None and idx in instance_info_map:
                 class_name = instance_info_map[idx].get("class_name", "Unknown Class")
                 class_name = self._normalize_to_fixed_enum_type(class_name)
@@ -140,8 +232,10 @@ class ExporterTreeMixin:
             return {"Ref": {"ref_instance_id": idx, "missing": True}}
 
         if inst.get("is_userdata_reference"):
-            # Keep instance references stable while parsing or packing data.
-            # Keep path handling explicit to avoid ambiguous working directories.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
+            # Resolve and validate paths at the boundary so later code never guesses
+            # relative to a surprising working directory.
             class_name = inst.get("class_name", "Unknown Class")
             class_name = self._normalize_to_fixed_enum_type(class_name)
             return {
@@ -166,7 +260,7 @@ class ExporterTreeMixin:
         if isinstance(resolved, dict):
             node_value: Any = resolved
         else:
-            # Keep this implementation detail explicit.
+            # Wrap scalar or non-dict results in a value field so every tree node keeps a consistent object shape.
             node_value = {"value": resolved}
 
         return {class_name: node_value}
@@ -179,7 +273,22 @@ class ExporterTreeMixin:
         instance_info_map: dict[int, dict[str, Any]] | None,
         visited: set[int],
     ) -> Any:
-        """Internal helper for resolve compact value with info."""
+        """Resolve compact value with info.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (Any): Value to parse, normalize, compare, or serialize.
+            idx_map (dict[int, dict[str, Any]]): Mapping used to resolve related metadata.
+            depth (int): Remaining recursive expansion depth for reference traversal.
+            instance_info_map (dict[int, dict[str, Any]] | None): Mapping used to resolve
+            related metadata.
+            visited (set[int]): Set of instance indexes already seen on the current traversal path.
+
+        Returns:
+            Any: Normalized value ready for the next parse, export, post-processing, or pack step.
+        """
         if isinstance(value, dict):
             if "ref_instance_id" in value and isinstance(value["ref_instance_id"], int):
                 target_idx = value["ref_instance_id"]

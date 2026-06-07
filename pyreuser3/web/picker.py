@@ -1,4 +1,8 @@
-"""Native file and directory picker used by the local Web UI."""
+"""Open native tkinter file or directory dialogs for Web UI path selection.
+
+Imports are delayed until a picker is requested so headless help output and server
+startup do not initialize GUI resources.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +10,25 @@ import threading
 from pathlib import Path
 from typing import Any
 
-# Keep native picker handling predictable for local users.
+# Serialize native picker usage and clean up GUI resources so repeated browser clicks do
+# not leave stray windows.
 _PICKER_LOCK = threading.Lock()
 
 
 def pick_path(payload: dict[str, Any]) -> dict[str, str]:
-    """Open a native picker and return the selected path."""
-    # Keep native picker handling predictable for local users.
+    """Open a native picker and return the selected file or directory path.
+
+    Args:
+        payload (dict[str, Any]): JSON request body or Web form payload.
+
+    Returns:
+        dict[str, str]: Small JSON response mapping returned to the browser.
+
+    Raises:
+        ValueError: The caller supplied a missing, malformed, or out-of-range value.
+    """
+    # Serialize native picker usage and clean up GUI resources so repeated browser
+    # clicks do not leave stray windows.
     # Delay the import so lightweight commands do not load heavy dependencies.
     import tkinter as tk
     from tkinter import filedialog
@@ -22,11 +38,12 @@ def pick_path(payload: dict[str, Any]) -> dict[str, str]:
     filetypes = _normalize_filetypes(payload.get("filetypes"))
 
     with _PICKER_LOCK:
-        # Keep this implementation detail explicit.
+        # Serialize native dialogs so multiple browser requests cannot open competing Tk windows.
         root = tk.Tk()
         root.withdraw()
         try:
-            # Keep Web UI behavior explicit and predictable.
+            # Keep the local HTTP and frontend behavior explicit because the Web UI runs
+            # without a separate framework.
             root.attributes("-topmost", True)
         except Exception:
             pass
@@ -46,15 +63,23 @@ def pick_path(payload: dict[str, Any]) -> dict[str, str]:
             else:
                 raise ValueError("path picker kind must be file or directory")
         finally:
-            # Keep this implementation detail explicit.
+            # Always destroy the temporary Tk root to release GUI resources after the dialog closes.
             root.destroy()
 
-    # Preserve field layout details for binary compatibility.
+    # Follow schema field layout exactly so alignment, padding, and unknown data remain
+    # binary-compatible.
     return {"path": str(Path(selected)) if selected else ""}
 
 
 def _normalize_filetypes(raw: Any) -> list[tuple[str, str]]:
-    """Internal helper for normalize filetypes."""
+    """Normalize filetypes.
+
+    Args:
+        raw (Any): Raw metadata, JSON, or binary value being normalized.
+
+    Returns:
+        list[tuple[str, str]]: Configured object or normalized value returned for the caller to use directly.
+    """
     if not isinstance(raw, list):
         return [("All files", "*.*")]
 

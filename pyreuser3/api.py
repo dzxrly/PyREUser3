@@ -1,4 +1,9 @@
-"""High-level API facade for RE Engine .user.3 JSON workflows."""
+"""Provide the REUser3Converter facade used by downstream Python code.
+
+The facade hides exporter and packer construction details, keeps schema and il2cpp dump
+configuration in one place, and offers convenient single-file, batch, and patch-and-
+repack workflows.
+"""
 
 from __future__ import annotations
 
@@ -12,14 +17,18 @@ from .core import RSZ_MAGIC, USR_MAGIC
 from .export import User3Exporter
 from .pack import User3Packer
 
-# Keep the JSON shape stable for callers and editors.
+# Preserve the exported JSON structure so external scripts and hand-edited files remain
+# compatible across workflows.
 JsonTree = Any
-# Keep this implementation detail explicit.
+# Patch callbacks may accept only the parsed data or both the data and source
+# path; returning None means the callback mutated in place.
 PatchCallback = Callable[..., Optional[JsonTree]]
 
 
 class REUser3Converter:
-    """Reusable facade for exporting, parsing, patching, and packing .user.3 data."""
+    """Store shared conversion configuration and expose high-level export, parse, patch, and
+    pack workflows.
+    """
 
     def __init__(
         self,
@@ -30,8 +39,24 @@ class REUser3Converter:
         user_magic: int = USR_MAGIC,
         rsz_magic: int = RSZ_MAGIC,
     ) -> None:
-        """Initialize the instance."""
-        # Keep this implementation detail explicit.
+        """Initialize REUser3Converter with validated configuration and state.
+
+        Args:
+            schema_path (str | Path | None): Explicit RE_RSZ schema JSON file path.
+            il2cpp_dump_path (str | Path | None): Path to il2cpp_dump.json for enum metadata.
+            tree_depth (int | str): Requested reference-tree expansion depth or auto mode.
+            schema_dir (str | Path | None): Compatibility schema argument that must resolve to a
+            schema JSON file.
+            user_magic (int): Expected magic value for the outer .user.3 container header.
+            rsz_magic (int): Expected magic value for embedded RSZ blocks.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+
+        Raises:
+            TypeError: The caller supplied a value of an unsupported type.
+        """
+        # Accept the legacy schema_dir alias from older callers, but normalize all internal state to schema_path.
         if schema_path is None:
             schema_path = schema_dir
         if schema_path is None:
@@ -48,7 +73,17 @@ class REUser3Converter:
         output_root: str | Path,
         exclude_regexes: list[str] | None = None,
     ) -> dict[str, int]:
-        """Export directory."""
+        """Export every selected .user.3 file under a directory or single-file root.
+
+        Args:
+            user3_root (str | Path): Source .user.3 file or directory root.
+            output_root (str | Path): Directory where generated output is written.
+            exclude_regexes (list[str] | None): Regular expressions used to skip matching
+            relative paths.
+
+        Returns:
+            dict[str, int]: Counters describing total, successful, and failed items.
+        """
         exporter = self._new_exporter(user3_root, output_root, exclude_regexes)
         return exporter.run()
 
@@ -57,9 +92,18 @@ class REUser3Converter:
         user3_path: str | Path,
         json_path: str | Path,
     ) -> Path:
-        """Export file."""
-        # Keep this implementation detail explicit.
-        # Keep the JSON shape stable for callers and editors.
+        """Export one .user.3 file to the requested JSON path.
+
+        Args:
+            user3_path (str | Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+            json_path (str | Path): Path to the JSON document read from or written by this workflow.
+
+        Returns:
+            Path: Concrete filesystem path returned after the read, write, or resolution step finishes.
+        """
+        # Reuse parse_file so single-file and batch exports keep the same parsed JSON shape and metadata handling.
+        # Preserve the exported JSON structure so external scripts and hand-edited files
+        # remain compatible across workflows.
         tree = self.parse_file(user3_path, round_floats=True)
         target = Path(json_path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -69,10 +113,19 @@ class REUser3Converter:
         return target
 
     def parse_file(self, user3_path: str | Path, round_floats: bool = True) -> JsonTree:
-        """Parse file."""
+        """Parse one .user.3 file into the compact exported JSON tree.
+
+        Args:
+            user3_path (str | Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+            round_floats (bool): Whether exported floats should be rounded to four decimal places for readability.
+
+        Returns:
+            JsonTree: JSON-compatible tree used by export, editing, or packing workflows.
+        """
         exporter = self._new_exporter(user3_path, Path.cwd(), [])
-        # Keep this implementation detail explicit.
-        # Keep enum metadata consistent while converting values.
+        # Build enum lookup and context metadata in memory; single-file parsing should not create Enums_Internal.json.
+        # Register enum values through the shared lookup tables so readable labels and
+        # numeric packing stay reversible.
         self._prepare_exporter_metadata(exporter)
         tree = exporter._parse_user3(Path(user3_path))
         tree = exporter._postprocess_enum_nodes(tree)
@@ -82,7 +135,14 @@ class REUser3Converter:
         return tree
 
     def parse_pack_file(self, user3_path: str | Path) -> JsonTree:
-        """Parse pack file."""
+        """Parse one .user.3 file into the full instance-table JSON used for stable repacking.
+
+        Args:
+            user3_path (str | Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+
+        Returns:
+            JsonTree: JSON-compatible tree used by export, editing, or packing workflows.
+        """
         exporter = self._new_exporter(user3_path, Path.cwd(), [])
         self._prepare_exporter_metadata(exporter)
         return exporter._parse_user3_pack(Path(user3_path))
@@ -93,17 +153,42 @@ class REUser3Converter:
         output_root: str | Path,
         exclude_regexes: list[str] | None = None,
     ) -> dict[str, int]:
-        """Pack directory."""
+        """Pack every selected JSON file under a directory or single-file root.
+
+        Args:
+            json_root (str | Path): JSON file or directory root to process.
+            output_root (str | Path): Directory where generated output is written.
+            exclude_regexes (list[str] | None): Regular expressions used to skip matching
+            relative paths.
+
+        Returns:
+            dict[str, int]: Counters describing total, successful, and failed items.
+        """
         packer = self._new_packer(output_root)
         return packer.pack_directory(json_root, output_root, exclude_regexes)
 
     def pack_file(self, json_path: str | Path, user3_path: str | Path) -> Path:
-        """Pack file."""
+        """Pack one JSON document to the requested .user.3 path.
+
+        Args:
+            json_path (str | Path): Path to the JSON document read from or written by this workflow.
+            user3_path (str | Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+
+        Returns:
+            Path: Concrete filesystem path returned after the read, write, or resolution step finishes.
+        """
         packer = self._new_packer(Path(user3_path).parent)
         return packer.pack_json_file(json_path, user3_path)
 
     def pack(self, data: Any) -> bytes:
-        """Pack pack."""
+        """Encode an in-memory JSON tree as .user.3 bytes.
+
+        Args:
+            data (Any): JSON tree or binary payload consumed by this conversion step.
+
+        Returns:
+            bytes: Encoded binary data ready to write to disk.
+        """
         return self._new_packer(None).pack(data)
 
     def patch_file(
@@ -112,10 +197,19 @@ class REUser3Converter:
         output_path: str | Path,
         callback: PatchCallback,
     ) -> Path:
-        """Handle patch file."""
+        """Patch one .user.3 file through a callback and write the packed result.
+
+        Args:
+            user3_path (str | Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+            output_path (str | Path): Destination path where the generated file is written.
+            callback (PatchCallback): User callback that may inspect or modify parsed JSON.
+
+        Returns:
+            Path: Concrete filesystem path returned after the read, write, or resolution step finishes.
+        """
         source = Path(user3_path)
-        # Keep instance references stable while parsing or packing data.
-        # Keep instance references stable while parsing or packing data.
+        # Preserve instance numbering and reference identity; RSZ object links depend on
+        # these indexes remaining stable.
         data = self.parse_pack_file(source)
         modified = self._run_callback(callback, data, source)
         if modified is None:
@@ -133,7 +227,20 @@ class REUser3Converter:
         include_regexes: list[str] | None = None,
         exclude_regexes: list[str] | None = None,
     ) -> dict[str, int]:
-        """Handle patch directory."""
+        """Patch every selected .user.3 file under a root directory.
+
+        Args:
+            user3_root (str | Path): Source .user.3 file or directory root.
+            output_root (str | Path): Directory where generated output is written.
+            callback (PatchCallback): User callback that may inspect or modify parsed JSON.
+            include_regexes (list[str] | None): Regular expressions used to include matching
+            relative paths.
+            exclude_regexes (list[str] | None): Regular expressions used to skip matching
+            relative paths.
+
+        Returns:
+            dict[str, int]: Counters describing total, successful, and failed items.
+        """
         source_root = Path(user3_root)
         target_root = Path(output_root)
         files = self._discover_user3_files(source_root)
@@ -142,7 +249,8 @@ class REUser3Converter:
 
         total = success = failed = skipped = 0
         for file_path in files:
-            # Keep path handling explicit to avoid ambiguous working directories.
+            # Resolve and validate paths at the boundary so later code never guesses
+            # relative to a surprising working directory.
             rel = (
                 file_path.name
                 if source_root.is_file()
@@ -164,7 +272,8 @@ class REUser3Converter:
                 else file_path.relative_to(source_root)
             )
             try:
-                # Record per-file failures without stopping the whole batch.
+                # Treat each file independently so one malformed resource is reported
+                # but does not stop the rest of the batch.
                 self.patch_file(file_path, output_path, callback)
                 success += 1
             except Exception:
@@ -182,7 +291,20 @@ class REUser3Converter:
         output_root: str | Path,
         exclude_regexes: list[str] | None,
     ) -> User3Exporter:
-        """Internal helper for new exporter."""
+        """Create an exporter with this facade's schema, enum metadata, and magic values.
+
+        Args:
+            user3_root (str | Path): Source .user.3 file or directory root.
+            output_root (str | Path): Directory where generated output is written.
+            exclude_regexes (list[str] | None): Regular expressions used to skip matching
+            relative paths.
+
+        Returns:
+            User3Exporter: Configured object or normalized value returned for the caller to use directly.
+
+        Raises:
+            FileNotFoundError: A required file or directory was missing.
+        """
         if self.il2cpp_dump_path is None:
             raise FileNotFoundError("il2cpp_dump_path is required for exporting JSON")
         return User3Exporter(
@@ -197,7 +319,14 @@ class REUser3Converter:
         )
 
     def _new_packer(self, output_root: str | Path | None) -> User3Packer:
-        """Internal helper for new packer."""
+        """Create a packer with this facade's schema, enum metadata, and magic values.
+
+        Args:
+            output_root (str | Path | None): Directory where generated output is written.
+
+        Returns:
+            User3Packer: Configured object or normalized value returned for the caller to use directly.
+        """
         return User3Packer(
             schema_dir=self.schema_path,
             il2cpp_dump_path=self.il2cpp_dump_path,
@@ -207,13 +336,25 @@ class REUser3Converter:
         )
 
     def _prepare_exporter_metadata(self, exporter: User3Exporter) -> None:
-        """Internal helper for prepare exporter metadata."""
+        """Prepare exporter metadata.
+
+        Args:
+            exporter (User3Exporter): Exporter instance whose metadata caches are being prepared.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+
+        Raises:
+            FileNotFoundError: A required file or directory was missing.
+        """
         if self.il2cpp_dump_path is None or not self.il2cpp_dump_path.is_file():
             raise FileNotFoundError("il2cpp_dump_path is required for parsing JSON")
         with self.il2cpp_dump_path.open("r", encoding="utf-8") as f:
             il2cpp_dump = json.load(f)
-        # Keep this implementation detail explicit.
-        # Keep this implementation detail explicit.
+        # Batch export writes Enums_Internal.json for downstream tools; direct
+        # parsing keeps the same lookup only in memory.
+        # Keep the generated metadata attached to the exporter so field parsing can
+        # format enum names consistently.
         enums_internal = exporter.export_enums_internal(il2cpp_dump)
         exporter.enum_lookup = exporter._build_enum_lookup_from_enums_internal(
             enums_internal
@@ -224,7 +365,17 @@ class REUser3Converter:
 
     @staticmethod
     def _discover_user3_files(user3_root: Path) -> list[Path]:
-        """Internal helper for discover user3 files."""
+        """Discover user3 files.
+
+        Args:
+            user3_root (Path): Source .user.3 file or directory root.
+
+        Returns:
+            list[Path]: Filesystem paths selected for batch processing after suffix and exclusion checks.
+
+        Raises:
+            FileNotFoundError: A required file or directory was missing.
+        """
         if user3_root.is_file():
             return [user3_root]
         if not user3_root.is_dir():
@@ -238,11 +389,22 @@ class REUser3Converter:
     def _run_callback(
         callback: PatchCallback, data: JsonTree, source_path: Path
     ) -> JsonTree | None:
-        """Internal helper for run callback."""
+        """Run callback.
+
+        Args:
+            callback (PatchCallback): User callback that may inspect or modify parsed JSON.
+            data (JsonTree): JSON tree or binary payload consumed by this conversion step.
+            source_path (Path): Original source path associated with a patch callback or output
+            path.
+
+        Returns:
+            JsonTree | None: Configured object or normalized value returned for the caller to use directly.
+        """
         try:
             param_count = len(inspect.signature(callback).parameters)
         except (TypeError, ValueError):
-            # Keep this implementation detail explicit.
+            # Some callables do not expose inspectable signatures, so fall back to
+            # the full callback signature when introspection fails.
             param_count = 2
         if param_count <= 1:
             return callback(data)

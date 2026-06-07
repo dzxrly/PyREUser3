@@ -1,4 +1,8 @@
-"""Command line interface for the PyREUser3 package."""
+"""Define the pyreuser3 command line interface for exporting .user.3 files to JSON and packing JSON back to .user.3.
+
+Heavy converter imports stay inside subcommand handlers so help and version output
+remain lightweight.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +15,24 @@ from .core import RSZ_MAGIC, USR_MAGIC
 
 
 def parse_int_arg(value: str) -> int:
-    """Parse decimal or 0x-prefixed integer command line values."""
+    """Parse a decimal or hexadecimal integer command line value.
+
+    Args:
+        value (str): Value to parse, normalize, compare, or serialize.
+
+    Returns:
+        int: Integer decoded from input data, metadata, or the command-line option being parsed.
+    """
     return int(value, 0)
 
 
 def package_version() -> str:
-    """Return installed package version, with a source-tree fallback."""
+    """Return the installed package version with a source-tree fallback.
+
+
+    Returns:
+        str: Normalized or formatted text.
+    """
     try:
         return version("PyREUser3")
     except PackageNotFoundError:
@@ -24,7 +40,14 @@ def package_version() -> str:
 
 
 def normalize_tree_depth(value: str) -> int | str:
-    """Normalize tree depth argument to an integer or the string 'auto'."""
+    """Normalize a tree-depth CLI value to auto or a non-negative integer.
+
+    Args:
+        value (str): Value to parse, normalize, compare, or serialize.
+
+    Returns:
+        int | str: Parsed integer value or the literal auto mode.
+    """
     text = value.strip().lower()
     if text == "auto":
         return "auto"
@@ -35,7 +58,14 @@ def normalize_tree_depth(value: str) -> int | str:
 
 
 def add_magic_args(parser: argparse.ArgumentParser) -> None:
-    """Add common .user.3 and RSZ magic options to a subparser."""
+    """Add shared USR and RSZ magic number options to a parser.
+
+    Args:
+        parser (argparse.ArgumentParser): Argument parser being populated with CLI subcommands and shared options.
+
+    Returns:
+        None. The method performs its documented side effect in place and raises on invalid input.
+    """
     parser.add_argument(
         "--user-magic",
         type=parse_int_arg,
@@ -51,7 +81,12 @@ def add_magic_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the top-level CLI parser."""
+    """Build the CLI parser and subcommands.
+
+
+    Returns:
+        argparse.ArgumentParser: Configured argument parser for the command-line interface.
+    """
     parser = argparse.ArgumentParser(
         prog="pyreuser3",
         description="Convert RE Engine .user.3 files to JSON and pack them back.",
@@ -155,7 +190,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_export(args: argparse.Namespace) -> int:
-    """Run the export subcommand."""
+    """Run the CLI export subcommand.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line namespace for the selected CLI command.
+
+    Returns:
+        int: Integer decoded from input data, metadata, or the command-line option being parsed.
+    """
     from .export import User3Exporter
     from .rich_ui import get_console
 
@@ -177,7 +219,14 @@ def run_export(args: argparse.Namespace) -> int:
 
 
 def run_pack(args: argparse.Namespace) -> int:
-    """Run the pack subcommand."""
+    """Run the CLI pack subcommand.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line namespace for the selected CLI command.
+
+    Returns:
+        int: Integer decoded from input data, metadata, or the command-line option being parsed.
+    """
     from .pack import User3Packer
     from .rich_ui import get_console
 
@@ -200,7 +249,14 @@ def run_pack(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry point used by the pyreuser3 console script."""
+    """Run the command entry point.
+
+    Args:
+        argv (Sequence[str] | None): Optional argument list; None means use the process command line.
+
+    Returns:
+        int: Integer decoded from input data, metadata, or the command-line option being parsed.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))

@@ -1,4 +1,8 @@
-"""Parser for the physical .user.3 USR and RSZ file layout."""
+"""Parse the physical USR header and embedded RSZ sections of .user.3 files.
+
+The parser returns intermediate documents that can be converted either to readable JSON
+trees or to full pack-format JSON.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +13,28 @@ from ..core import BinaryReader, PACK_JSON_FORMAT, ParseError, align
 
 
 class ExporterUser3ParserMixin:
-    """Mixin for parsing complete .user.3 files."""
+    """Parse USR and RSZ sections of .user.3 files into intermediate documents and exportable
+    trees.
+    """
 
     def _parse_user3_document(self, user3_path: Path) -> dict[str, Any]:
-        """Internal helper for parse user3 document."""
+        """Parse user3 document.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            user3_path (Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+
+        Returns:
+            dict[str, Any]: JSON-compatible dictionary for API or conversion callers.
+
+        Raises:
+            ParseError: Binary data did not match the expected .user.3 or RSZ layout.
+        """
         reader = BinaryReader(user3_path.read_bytes())
 
-        # Keep this implementation detail explicit.
+        # The outer .user.3 container starts with a USR header; callers may override magic for game variants.
         magic = reader.read_u32()
         if magic != self.user_magic:
             raise ParseError(f"not a user file: magic={magic}")
@@ -32,7 +51,8 @@ class ExporterUser3ParserMixin:
         header_userdata_infos: list[dict[str, Any]] = []
         if usr_header["userdata_count"] > 0 and usr_header["userdata_info_tbl"] > 0:
             try:
-                # Keep path handling explicit to avoid ambiguous working directories.
+                # Resolve and validate paths at the boundary so later code never guesses
+                # relative to a surprising working directory.
                 reader.seek(usr_header["userdata_info_tbl"])
                 for idx in range(usr_header["userdata_count"]):
                     class_hash = reader.read_u32()
@@ -52,12 +72,14 @@ class ExporterUser3ParserMixin:
                         }
                     )
             except Exception:
-                # Record per-file failures without stopping the whole batch.
+                # Treat each file independently so one malformed resource is reported
+                # but does not stop the rest of the batch.
                 header_userdata_infos = []
 
         rsz_start = usr_header["data_offset"]
 
-        # Honor binary alignment and offset rules.
+        # Apply RE Engine alignment and offset rules before touching binary fields;
+        # later table offsets assume this layout.
         reader.seek(rsz_start)
         rsz_header = {
             "magic": reader.read_u32(),
@@ -75,7 +97,8 @@ class ExporterUser3ParserMixin:
                 f"RSZ magic mismatch at data_offset: {rsz_header['magic']}"
             )
 
-        # Keep instance references stable while parsing or packing data.
+        # Preserve instance numbering and reference identity; RSZ object links depend on
+        # these indexes remaining stable.
         reader.seek(rsz_start + 48)
         object_table = [
             reader.read_s32() for _i in range(max(rsz_header["object_count"], 0))
@@ -85,7 +108,8 @@ class ExporterUser3ParserMixin:
         instance_infos: list[dict[str, Any]] = []
         reader.seek(rsz_start + rsz_header["instance_offset"])
         for idx in range(max(rsz_header["instance_count"], 0)):
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             class_hash = reader.read_u32()
             crc = reader.read_u32()
             class_def = self.typedb.get_class(class_hash)
@@ -104,7 +128,8 @@ class ExporterUser3ParserMixin:
         rsz_userdata_path_by_instance: dict[int, str] = {}
         if rsz_header["userdata_count"] > 0 and rsz_header["userdata_offset"] > 0:
             try:
-                # Keep instance references stable while parsing or packing data.
+                # Preserve instance numbering and reference identity; RSZ object links
+                # depend on these indexes remaining stable.
                 reader.seek(rsz_start + rsz_header["userdata_offset"])
                 for _i in range(rsz_header["userdata_count"]):
                     instance_id = reader.read_s32()
@@ -117,7 +142,8 @@ class ExporterUser3ParserMixin:
                             path = reader.read_wstring_null(rsz_start + path_offset)
                         rsz_userdata_path_by_instance[instance_id] = path
             except Exception:
-                # Record per-file failures without stopping the whole batch.
+                # Treat each file independently so one malformed resource is reported
+                # but does not stop the rest of the batch.
                 rsz_userdata_instance_ids = []
                 rsz_userdata_path_by_instance = {}
         rsz_userdata_instance_set = set(rsz_userdata_instance_ids)
@@ -127,7 +153,8 @@ class ExporterUser3ParserMixin:
         for idx, info in enumerate(instance_infos):
             class_hash = int(info["hash"])
             if idx == 0:
-                # Keep instance references stable while parsing or packing data.
+                # Preserve instance numbering and reference identity; RSZ object links
+                # depend on these indexes remaining stable.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -137,7 +164,8 @@ class ExporterUser3ParserMixin:
                 )
                 continue
             if idx in rsz_userdata_instance_set:
-                # Keep path handling explicit to avoid ambiguous working directories.
+                # Resolve and validate paths at the boundary so later code never guesses
+                # relative to a surprising working directory.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -149,7 +177,8 @@ class ExporterUser3ParserMixin:
                 continue
             cls = self.typedb.get_class(class_hash)
             if cls is None:
-                # Preserve field layout details for binary compatibility.
+                # Follow schema field layout exactly so alignment, padding, and unknown
+                # data remain binary-compatible.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -161,7 +190,8 @@ class ExporterUser3ParserMixin:
                 continue
             if cls.fields:
                 first = cls.fields[0]
-                # Keep instance references stable while parsing or packing data.
+                # Preserve instance numbering and reference identity; RSZ object links
+                # depend on these indexes remaining stable.
                 reader.seek(
                     align(reader.tell(), 4 if first.is_array else max(first.align, 1))
                 )
@@ -171,7 +201,8 @@ class ExporterUser3ParserMixin:
                     {"index": idx, "data": self._parse_instance(reader, class_hash)}
                 )
             except Exception as exc:
-                # Record per-file failures without stopping the whole batch.
+                # Treat each file independently so one malformed resource is reported
+                # but does not stop the rest of the batch.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -195,12 +226,14 @@ class ExporterUser3ParserMixin:
             set(i for i in object_table if isinstance(i, int) and i >= 0)
         )
         if not object_roots:
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             object_roots = self._infer_roots_when_object_table_empty(
                 idx_map, parsed_instances
             )
         if not object_roots and rsz_userdata_instance_ids:
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             object_roots = sorted(
                 set(
                     i
@@ -209,7 +242,8 @@ class ExporterUser3ParserMixin:
                 )
             )
         if not object_roots:
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             object_roots = sorted(i for i in instance_info_map.keys() if i > 0)
 
         return {
@@ -227,21 +261,32 @@ class ExporterUser3ParserMixin:
         }
 
     def _parse_user3(self, user3_path: Path) -> list[dict[str, Any]]:
-        """Internal helper for parse user3."""
+        """Parse user3.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            user3_path (Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+
+        Returns:
+            list[dict[str, Any]]: Raw userdata section dictionaries preserved for the pack document.
+        """
         document = self._parse_user3_document(user3_path)
         parsed_instances = document["parsed_instances"]
         object_roots = document["object_roots"]
         instance_info_map = document["instance_info_map"]
         idx_map = document["idx_map"]
         header_userdata_infos = document["header_userdata_infos"]
-        # Keep this implementation detail explicit.
+        # Record raw sections that the minimal writer cannot rebuild so packing can reject lossy round trips.
         depth = (
             self._auto_pick_tree_depth(parsed_instances, object_roots)
             if self.tree_depth == "auto"
             else self.tree_depth
         )
         object_trees = [
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             self._build_compact_tree(
                 root_idx,
                 idx_map,
@@ -252,7 +297,8 @@ class ExporterUser3ParserMixin:
             if root_idx in instance_info_map
         ]
         if not object_trees and header_userdata_infos:
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             return [
                 {
                     item["class_name"]: {
@@ -265,11 +311,31 @@ class ExporterUser3ParserMixin:
         return object_trees
 
     def _parse_user3_pack(self, user3_path: Path) -> dict[str, Any]:
-        """Internal helper for parse user3 pack."""
+        """Parse user3 pack.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            user3_path (Path): Path to the .user.3 file being parsed, exported, patched, or packed.
+
+        Returns:
+            dict[str, Any]: JSON-compatible dictionary for API or conversion callers.
+        """
         return self._build_pack_json(self._parse_user3_document(user3_path))
 
     def _build_pack_json(self, document: dict[str, Any]) -> dict[str, Any]:
-        """Internal helper for build pack json."""
+        """Build pack json.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            document (dict[str, Any]): Exported JSON document or pack document being inspected.
+
+        Returns:
+            dict[str, Any]: JSON-compatible dictionary for API or conversion callers.
+        """
         instances: dict[str, Any] = {}
         warnings: list[str] = []
         unsupported: list[str] = []
@@ -278,7 +344,7 @@ class ExporterUser3ParserMixin:
         usr_header = document["usr_header"]
         rsz_header = document["rsz_header"]
 
-        # Keep this implementation detail explicit.
+        # Instance 0 is the null reference slot and is represented as None in the exported document.
         if int(usr_header.get("resource_count", 0)) > 0:
             unsupported.append("USR resource table")
         if int(usr_header.get("userdata_count", 0)) > 0:
@@ -299,7 +365,8 @@ class ExporterUser3ParserMixin:
             }
             inst = idx_map.get(idx)
             if idx == 0:
-                # Keep instance references stable while parsing or packing data.
+                # Preserve instance numbering and reference identity; RSZ object links
+                # depend on these indexes remaining stable.
                 entry["_class"] = None
                 entry["_kind"] = "null"
             elif inst is None:
@@ -327,7 +394,8 @@ class ExporterUser3ParserMixin:
                 fields = data.get("fields", {})
                 if not isinstance(fields, dict):
                     fields = {}
-                # Keep enum metadata consistent while converting values.
+                # Register enum values through the shared lookup tables so readable
+                # labels and numeric packing stay reversible.
                 entry["fields"] = self._postprocess_enum_nodes(
                     fields,
                     current_class=class_name if isinstance(class_name, str) else None,
@@ -362,5 +430,15 @@ class ExporterUser3ParserMixin:
 
     @staticmethod
     def _format_hex_u32(value: int) -> str:
-        """Internal helper for format hex u32."""
+        """Format hex u32.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (int): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            str: Normalized or formatted text.
+        """
         return f"0x{value & 0xFFFFFFFF:08x}"

@@ -1,4 +1,8 @@
-"""Embedded HTML, CSS, and TypeScript templates for the local Web UI."""
+"""Embed the Web UI HTML, CSS, and TypeScript strings returned by the local server.
+
+The page contains bilingual UI text, browser-language detection, path pickers, job
+polling, and log rendering.
+"""
 
 from __future__ import annotations
 

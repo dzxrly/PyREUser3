@@ -1,4 +1,8 @@
-"""Public package exports for the RE User3 JSON toolkit."""
+"""Expose the stable public API while keeping expensive converter modules lazy.
+
+The package-level __getattr__ hook avoids importing Rich and binary conversion code for
+lightweight operations such as version checks and Web UI help output.
+"""
 
 from __future__ import annotations
 
@@ -35,12 +39,19 @@ _EXPORT_MODULES = {
 
 
 def __getattr__(name: str) -> Any:
-    """Lazily resolve public package exports."""
+    """Resolve a lazily exported package attribute on first access.
+
+    Args:
+        name (str): Symbolic schema, class, field, or enum name being stored or looked up.
+
+    Returns:
+        Any: Normalized value ready for the next parse, export, post-processing, or pack step.
+    """
     module_name = _EXPORT_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    # Keep this implementation detail explicit.
+    # Cache the resolved object in globals so later attribute access bypasses __getattr__ and avoids another import.
     module = import_module(module_name, __name__)
     value = getattr(module, name)
     globals()[name] = value

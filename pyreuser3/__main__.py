@@ -1,4 +1,5 @@
-"""Run the PyREUser3 CLI with ``python -m pyreuser3``."""
+"""Provide helpers for __main__.
+"""
 
 from __future__ import annotations
 

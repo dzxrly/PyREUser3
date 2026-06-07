@@ -1,4 +1,8 @@
-"""Field parsing helpers for RE_RSZ instance data."""
+"""Parse RSZ scalar, array, object-reference, and struct fields according to schema metadata.
+
+The parser preserves raw bytes for unsupported or uncertain layouts so exported JSON
+remains useful even when templates are incomplete.
+"""
 
 from __future__ import annotations
 
@@ -16,14 +20,28 @@ from ..schema import ClassDef, FieldDef
 
 
 class ExporterFieldParserMixin:
-    """Mixin for parsing fields from RSZ instance data."""
+    """Read scalar, array, object-reference, and struct field values according to RE_RSZ schema
+    metadata.
+    """
 
     def _parse_scalar(
         self, reader: BinaryReader, field: FieldDef, depth: int = 0
     ) -> Any:
-        """Internal helper for parse scalar."""
+        """Parse scalar.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            reader (BinaryReader): BinaryReader positioned at the value to parse.
+            field (FieldDef): Schema field definition for the value being parsed or written.
+            depth (int): Remaining recursive expansion depth for reference traversal.
+
+        Returns:
+            Any: Normalized value ready for the next parse, export, post-processing, or pack step.
+        """
         t = field.field_type
-        # Keep this implementation detail explicit.
+        # Primitive numeric field types map directly to little-endian binary reads.
         if t == "Bool":
             return bool(reader.read_u8())
         if t == "S8":
@@ -49,7 +67,8 @@ class ExporterFieldParserMixin:
         if t == "F64":
             return reader.read_f64()
         if t in ("Object", "UserData"):
-            # Keep instance references stable while parsing or packing data.
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
             return {"ref_instance_id": reader.read_s32()}
         if t in ("String", "Resource"):
             return read_len_utf16(reader)
@@ -59,12 +78,14 @@ class ExporterFieldParserMixin:
             return read_guid_like(reader)
         if t == "Struct":
             if depth >= 4:
-                # Preserve field layout details for binary compatibility.
+                # Follow schema field layout exactly so alignment, padding, and unknown
+                # data remain binary-compatible.
                 to_read = max(0, min(field.size, reader.size - reader.tell()))
                 return {"raw": reader.read(to_read).hex(), "truncated": True}
             struct_hash = self.typedb.resolve_struct_hash(field.original_type)
             if struct_hash is None:
-                # Preserve field layout details for binary compatibility.
+                # Follow schema field layout exactly so alignment, padding, and unknown
+                # data remain binary-compatible.
                 to_read = max(0, min(field.size, reader.size - reader.tell()))
                 return {
                     "raw": reader.read(to_read).hex(),
@@ -80,7 +101,8 @@ class ExporterFieldParserMixin:
             start = reader.tell()
             out: dict[str, Any] = {}
             for sf in struct_cls.fields:
-                # Preserve field layout details for binary compatibility.
+                # Follow schema field layout exactly so alignment, padding, and unknown
+                # data remain binary-compatible.
                 reader.seek(
                     align(reader.tell(), 4 if sf.is_array else max(sf.align, 1))
                 )
@@ -89,7 +111,8 @@ class ExporterFieldParserMixin:
                 )
             consumed = reader.tell() - start
             if field.size > consumed:
-                # Preserve field layout details for binary compatibility.
+                # Follow schema field layout exactly so alignment, padding, and unknown
+                # data remain binary-compatible.
                 reader.seek(reader.tell() + (field.size - consumed))
             return out
         if t in {
@@ -108,31 +131,47 @@ class ExporterFieldParserMixin:
             "Mat4",
             "Position",
         }:
-            # Keep this implementation detail explicit.
+            # Vector and matrix fields are stored as contiguous float32 components;
+            # the declared field size determines the component count.
             count = max(field.size // 4, 1)
             return [reader.read_f32() for _ in range(count)]
 
         if field.size <= 0:
             return None
         to_read = max(0, min(field.size, reader.size - reader.tell()))
-        # Keep this implementation detail explicit.
+        # Preserve unrecognized field bytes as hex so unsupported layouts remain
+        # inspectable instead of silently discarding data.
         return {"raw": reader.read(to_read).hex(), "type": t}
 
     def _parse_field_value(
         self, reader: BinaryReader, field: FieldDef, depth: int = 0
     ) -> Any:
-        """Internal helper for parse field value."""
+        """Parse field value.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            reader (BinaryReader): BinaryReader positioned at the value to parse.
+            field (FieldDef): Schema field definition for the value being parsed or written.
+            depth (int): Remaining recursive expansion depth for reference traversal.
+
+        Returns:
+            Any: Normalized value ready for the next parse, export, post-processing, or pack step.
+        """
         if field.is_array:
             count = reader.read_u32()
             if count > 1_000_000:
-                # Keep this implementation detail explicit.
+                # Treat impossible array lengths as cursor or template corruption
+                # and return an empty array rather than reading arbitrary memory.
                 return []
             items = []
             for _ in range(count):
                 if reader.tell() >= reader.size:
                     break
                 reader.seek(align(reader.tell(), max(field.align, 1)))
-                # Preserve field layout details for binary compatibility.
+                # Follow schema field layout exactly so alignment, padding, and unknown
+                # data remain binary-compatible.
                 non_array = FieldDef(
                     name=field.name,
                     field_type=field.field_type,
@@ -146,10 +185,18 @@ class ExporterFieldParserMixin:
         return self._parse_scalar(reader, field, depth=depth)
 
     def _estimate_min_instance_size(self, cls: ClassDef) -> int:
-        """Internal helper for estimate min instance size."""
+        """Estimate the smallest binary size required for a parsed instance layout.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            int: Integer decoded from input data, metadata, or the command-line option being parsed.
+        """
         pos = 0
         for field in cls.fields:
-            # Record per-file failures without stopping the whole batch.
+            # Treat each file independently so one malformed resource is reported but
+            # does not stop the rest of the batch.
             align_to = 4 if field.is_array else max(field.align, 1)
             pos = align(pos, align_to)
             t = field.field_type
@@ -174,13 +221,28 @@ class ExporterFieldParserMixin:
         return max(pos, 1)
 
     def _parse_instance(self, reader: BinaryReader, class_hash: int) -> dict[str, Any]:
-        """Internal helper for parse instance."""
+        """Parse instance.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            reader (BinaryReader): BinaryReader positioned at the value to parse.
+            class_hash (int): RE_RSZ type hash for a class.
+
+        Returns:
+            dict[str, Any]: JSON-compatible dictionary for API or conversion callers.
+
+        Raises:
+            ParseError: Binary data did not match the expected .user.3 or RSZ layout.
+        """
         cls = self.typedb.get_class(class_hash)
         if cls is None:
             raise ParseError(f"class hash 0x{class_hash:08x} not found in schema")
         out: dict[str, Any] = {"_class": cls.name, "fields": {}}
         for field in cls.fields:
-            # Preserve field layout details for binary compatibility.
+            # Follow schema field layout exactly so alignment, padding, and unknown data
+            # remain binary-compatible.
             reader.seek(
                 align(reader.tell(), 4 if field.is_array else max(field.align, 1))
             )

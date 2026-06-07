@@ -1,4 +1,8 @@
-"""Metadata loading helpers for schema and il2cpp dump context."""
+"""Build enum lookup tables and contextual field hints from il2cpp dump metadata.
+
+The exporter uses this context to decide which numeric fields can safely be rendered as
+fixed enum labels.
+"""
 
 from __future__ import annotations
 
@@ -11,28 +15,71 @@ from ..rich_ui import get_console
 
 
 class ExporterMetadataMixin:
-    """Mixin for loading export metadata and enum context."""
+    """Load enum metadata, fixed-id context, and lookup tables used while exporting readable
+    JSON.
+    """
 
     @staticmethod
     def _id_formatter(key: str, value: int) -> str:
-        """Internal helper for id formatter."""
+        """Build a stable identifier formatter for enum metadata keys.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            key (str): Payload key, metadata key, or enum key being read.
+            value (int): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            str: Normalized or formatted text.
+        """
         return f"[{value}] {key}"
 
     @staticmethod
     def _to_u32(value: int) -> int:
-        """Internal helper for to u32."""
+        """Normalize an integer-like value into an unsigned 32-bit integer.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (int): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            int: Integer decoded from input data, metadata, or the command-line option being parsed.
+        """
         return value & 0xFFFFFFFF
 
     @staticmethod
     def _to_s32(value: int) -> int:
-        """Internal helper for to s32."""
+        """Normalize an integer-like value into a signed 32-bit integer.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            value (int): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            int: Integer decoded from input data, metadata, or the command-line option being parsed.
+        """
         u32 = value & 0xFFFFFFFF
         return u32 if u32 < 0x80000000 else u32 - 0x100000000
 
     def _build_enum_lookup_from_enums_internal(
         self, raw: Any
     ) -> dict[str, dict[int, tuple[str, int]]]:
-        """Internal helper for build enum lookup from enums internal."""
+        """Build enum lookup from enums internal.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            raw (Any): Raw metadata, JSON, or binary value being normalized.
+
+        Returns:
+            dict[str, dict[int, tuple[str, int]]]: Enum lookup table keyed by type name and numeric value.
+        """
         lookup: dict[str, dict[int, tuple[str, int]]] = {}
         if not isinstance(raw, dict):
             return lookup
@@ -49,8 +96,10 @@ class ExporterMetadataMixin:
                 if not isinstance(member_name, str) or not isinstance(raw_value, int):
                     continue
                 entry = (member_name, raw_value)
-                # Keep the JSON shape stable for callers and editors.
-                # Keep enum metadata consistent while converting values.
+                # Preserve the exported JSON structure so external scripts and hand-
+                # edited files remain compatible across workflows.
+                # Register enum values through the shared lookup tables so readable
+                # labels and numeric packing stay reversible.
                 value_map[self._to_s32(raw_value)] = entry
                 value_map[self._to_u32(raw_value)] = entry
             if value_map:
@@ -58,15 +107,40 @@ class ExporterMetadataMixin:
         return lookup
 
     def _load_enum_lookup(self) -> dict[str, dict[int, tuple[str, int]]]:
-        """Internal helper for load enum lookup."""
+        """Load enum lookup.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            dict[str, dict[int, tuple[str, int]]]: Enum lookup table keyed by type name and numeric value.
+        """
         return {}
 
     def _resolve_il2cpp_dump_path(self) -> Path | None:
-        """Internal helper for resolve il2cpp dump path."""
+        """Resolve il2cpp dump path.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            Path | None: Resolved path when the configured file exists; otherwise None.
+        """
         return self.il2cpp_dump_path if self.il2cpp_dump_path.is_file() else None
 
     def _ensure_internal_metadata_files(self) -> dict:
-        """Internal helper for ensure internal metadata files."""
+        """Ensure internal metadata files.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            dict: Mapping populated from schema, enum, or job metadata.
+
+        Raises:
+            FileNotFoundError: A required file or directory was missing.
+            ParseError: Binary data did not match the expected .user.3 or RSZ layout.
+        """
         dump_path = self._resolve_il2cpp_dump_path()
         if dump_path is None:
             raise FileNotFoundError(
@@ -81,13 +155,21 @@ class ExporterMetadataMixin:
         self.output_root.mkdir(parents=True, exist_ok=True)
         enums_out = self.output_root / "Enums_Internal.json"
         enums_internal = self.export_enums_internal(il2cpp_dump)
-        # Keep enum metadata consistent while converting values.
+        # Register enum values through the shared lookup tables so readable labels and
+        # numeric packing stay reversible.
         with enums_out.open("w", encoding="utf-8") as f:
             json.dump(enums_internal, f, ensure_ascii=False, indent=2)
         return enums_internal
 
     def _rebuild_enum_member_index(self) -> None:
-        """Internal helper for rebuild enum member index."""
+        """Rebuild reverse enum-member indexes used for numeric packing from labels.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+        """
         self.enum_member_to_types = {}
         for enum_type, value_map in self.enum_lookup.items():
             if not isinstance(enum_type, str) or not isinstance(value_map, dict):
@@ -102,7 +184,18 @@ class ExporterMetadataMixin:
     def _infer_enum_type_from_member_and_value(
         self, member_name: str, value: int
     ) -> str | None:
-        """Internal helper for infer enum type from member and value."""
+        """Infer enum type from member and value.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            member_name (str): Enum member label being resolved back to a numeric value.
+            value (int): Value to parse, normalize, compare, or serialize.
+
+        Returns:
+            str | None: Resolved string when a match is available; otherwise None.
+        """
         candidates = self.enum_member_to_types.get(member_name)
         if not candidates:
             return None
@@ -119,11 +212,22 @@ class ExporterMetadataMixin:
                 matched.append(enum_type)
         if len(matched) == 1:
             return matched[0]
-        # Keep enum metadata consistent while converting values.
+        # Register enum values through the shared lookup tables so readable labels and
+        # numeric packing stay reversible.
         return None
 
     def _apply_enum_context(self, raw: dict) -> None:
-        """Internal helper for apply enum context."""
+        """Apply enum context.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Args:
+            raw (dict): Raw metadata, JSON, or binary value being normalized.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+        """
         self.class_field_fixed_types = {}
         self.serializable_to_fixed = {}
         self.generic_container_rules = {}
@@ -136,7 +240,8 @@ class ExporterMetadataMixin:
                     continue
                 cleaned: dict[str, str] = {}
                 for field_name, enum_type in field_map.items():
-                    # Keep enum metadata consistent while converting values.
+                    # Register enum values through the shared lookup tables so readable
+                    # labels and numeric packing stay reversible.
                     if (
                         isinstance(field_name, str)
                         and isinstance(enum_type, str)
@@ -157,7 +262,8 @@ class ExporterMetadataMixin:
                     self.serializable_to_fixed[serializable_name] = fixed_name
 
         generic_container_rules = raw.get("generic_container_rules")
-        # Keep enum metadata consistent while converting values.
+        # Register enum values through the shared lookup tables so readable labels and
+        # numeric packing stay reversible.
         param_to_enum_sets: dict[str, set[str]] = {}
         if isinstance(generic_container_rules, dict):
             for container_name, rule in generic_container_rules.items():
@@ -178,11 +284,19 @@ class ExporterMetadataMixin:
 
         for param_type, enum_types in param_to_enum_sets.items():
             if len(enum_types) == 1:
-                # Keep enum metadata consistent while converting values.
+                # Register enum values through the shared lookup tables so readable
+                # labels and numeric packing stay reversible.
                 self.param_type_default_enum[param_type] = next(iter(enum_types))
 
     def _load_enum_context_from_il2cpp_dump(self) -> bool:
-        """Internal helper for load enum context from il2cpp dump."""
+        """Load enum context from il2cpp dump.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            bool: True when the inspected value matches the expected schema or metadata pattern; otherwise False.
+        """
         dump_path = self._resolve_il2cpp_dump_path()
         if dump_path is None:
             return False
@@ -196,7 +310,14 @@ class ExporterMetadataMixin:
         return True
 
     def _ensure_enum_lookup(self) -> None:
-        """Internal helper for ensure enum lookup."""
+        """Ensure enum lookup.
+
+        The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
+        templates can still produce inspectable output.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+        """
         if self.enum_lookup:
             self._rebuild_enum_member_index()
             return

@@ -1,4 +1,7 @@
-"""Module entry point for python -m pyreuser3.web."""
+"""Run the local Web UI when the package is invoked with python -m pyreuser3.web.
+
+The module delegates directly to the server entry point.
+"""
 
 from .server import main
 

@@ -1,4 +1,8 @@
-"""Main exporter that converts .user.3 files into compact JSON."""
+"""Compose exporter mixins into the concrete User3Exporter class and coordinate batch export work.
+
+The class validates inputs, discovers files, prepares enum metadata, writes JSON output,
+and reports per-file progress without stopping the whole batch on one failure.
+"""
 
 from __future__ import annotations
 
@@ -25,7 +29,9 @@ class User3Exporter(
     ExporterFieldParserMixin,
     ExporterUser3ParserMixin,
 ):
-    """Exporter for converting RE Engine .user.3 binaries into compact JSON."""
+    """Coordinate file discovery, enum preparation, parsing, post-processing, and JSON writing
+    for .user.3 export.
+    """
 
     def __init__(
         self,
@@ -38,8 +44,28 @@ class User3Exporter(
         user_magic: int = USR_MAGIC,
         rsz_magic: int = RSZ_MAGIC,
     ):
-        """Initialize the instance."""
-        # Keep path handling explicit to avoid ambiguous working directories.
+        """Initialize User3Exporter with validated configuration and state.
+
+        Args:
+            user3_root (str | Path): Source .user.3 file or directory root.
+            schema_dir (str | Path): Compatibility schema argument that must resolve to a schema
+            JSON file.
+            output_root (str | Path): Directory where generated output is written.
+            tree_depth (int | str): Requested reference-tree expansion depth or auto mode.
+            exclude_regexes (list[str] | None): Regular expressions used to skip matching
+            relative paths.
+            il2cpp_dump_path (str | Path): Path to il2cpp_dump.json for enum metadata.
+            user_magic (int): Expected magic value for the outer .user.3 container header.
+            rsz_magic (int): Expected magic value for embedded RSZ blocks.
+
+        Returns:
+            None. The method performs its documented side effect in place and raises on invalid input.
+
+        Raises:
+            FileNotFoundError: A required file or directory was missing.
+        """
+        # Resolve and validate paths at the boundary so later code never guesses
+        # relative to a surprising working directory.
         self.user3_root = Path(user3_root)
         self.schema_dir = Path(schema_dir)
         self.output_root = Path(output_root)
@@ -55,8 +81,8 @@ class User3Exporter(
         self._exclude_patterns = [re.compile(p) for p in self.exclude_regexes]
         self.schema_path = self._resolve_schema_path(self.schema_dir)
         self.typedb = TypeDB.load(self.schema_path)
-        # Keep enum metadata consistent while converting values.
-        # Keep enum metadata consistent while converting values.
+        # Register enum values through the shared lookup tables so readable labels and
+        # numeric packing stay reversible.
         self.enum_lookup: dict[str, dict[int, tuple[str, int]]] = {}
         self.class_field_fixed_types: dict[str, dict[str, str]] = {}
         self.serializable_to_fixed: dict[str, str] = {}
@@ -65,11 +91,18 @@ class User3Exporter(
         self.enum_member_to_types: dict[str, list[str]] = {}
 
     def run(self) -> dict[str, int]:
-        """Run the configured workflow."""
+        """Run the batch exporter and return conversion counters.
+
+
+        Returns:
+            dict[str, int]: Counters describing total, successful, and failed items.
+        """
         files = self._discover_user3_files()
         self.output_root.mkdir(parents=True, exist_ok=True)
-        # Keep enum metadata consistent while converting values.
-        # Keep this implementation detail explicit.
+        # Register enum values through the shared lookup tables so readable labels and
+        # numeric packing stay reversible.
+        # Rebuild enum metadata from the explicit il2cpp dump on every export to
+        # avoid cross-game or cross-version contamination.
         enums_internal = self._ensure_internal_metadata_files()
         self.enum_lookup = self._build_enum_lookup_from_enums_internal(enums_internal)
         self._load_enum_context_from_il2cpp_dump()
@@ -77,7 +110,8 @@ class User3Exporter(
 
         success = 0
         failed = 0
-        # Record per-file failures without stopping the whole batch.
+        # Treat each file independently so one malformed resource is reported but does
+        # not stop the rest of the batch.
         with BatchProgress(
             "Exporting user3", total=len(files), unit="file"
         ) as progress:
@@ -102,10 +136,20 @@ class User3Exporter(
     def _export_one_file(
         self, user3_file: Path
     ) -> tuple[bool, Path | None, str | None]:
-        """Internal helper for export one file."""
+        """Export one file.
+
+        Args:
+            user3_file (Path): Specific .user.3 file currently being processed.
+
+        Returns:
+            tuple[bool, Path | None, str | None]: Success flag, written path when
+            available, and error text when conversion fails.
+        """
         try:
-            # Keep enum metadata consistent while converting values.
-            # Keep the JSON shape stable for callers and editors.
+            # Register enum values through the shared lookup tables so readable labels
+            # and numeric packing stay reversible.
+            # Preserve the exported JSON structure so external scripts and hand-edited
+            # files remain compatible across workflows.
             tree = self._parse_user3(user3_file)
             tree = self._postprocess_enum_nodes(tree)
             tree = self._finalize_export_tree(tree)
@@ -116,15 +160,35 @@ class User3Exporter(
                 json.dump(tree, f, ensure_ascii=False, indent=2)
             return True, output_path, None
         except Exception as exc:
-            # Keep this implementation detail explicit.
+            # Convert per-file exceptions into result tuples so batch processing can
+            # continue and report each failed source.
             return False, None, f"{exc.__class__.__name__}: {exc}"
 
     def _resolve_schema_path(self, schema_dir: Path) -> Path:
-        """Internal helper for resolve schema path."""
+        """Resolve schema path.
+
+        Args:
+            schema_dir (Path): Compatibility schema argument that must resolve to a schema JSON
+            file.
+
+        Returns:
+            Path: Concrete filesystem path returned after the read, write, or resolution step finishes.
+        """
         return resolve_schema_path(schema_dir)
 
     def _normalize_tree_depth(self, tree_depth: int | str) -> int | str:
-        """Internal helper for normalize tree depth."""
+        """Normalize tree depth.
+
+        Args:
+            tree_depth (int | str): Requested reference-tree expansion depth or auto mode.
+
+        Returns:
+            int | str: Parsed integer value or the literal auto mode.
+
+        Raises:
+            TypeError: The caller supplied a value of an unsupported type.
+            ValueError: The caller supplied a missing, malformed, or out-of-range value.
+        """
         if isinstance(tree_depth, str):
             value = tree_depth.strip().lower()
             if value != "auto":
@@ -137,7 +201,15 @@ class User3Exporter(
         raise TypeError("tree_depth must be int or str")
 
     def _discover_user3_files(self) -> list[Path]:
-        """Internal helper for discover user3 files."""
+        """Discover user3 files.
+
+
+        Returns:
+            list[Path]: Filesystem paths selected for batch processing after suffix and exclusion checks.
+
+        Raises:
+            FileNotFoundError: A required file or directory was missing.
+        """
         if self.user3_root.is_file():
             files = [self.user3_root]
         else:
@@ -151,7 +223,8 @@ class User3Exporter(
 
         kept: list[Path] = []
         for file_path in files:
-            # Keep path handling explicit to avoid ambiguous working directories.
+            # Resolve and validate paths at the boundary so later code never guesses
+            # relative to a surprising working directory.
             if self.user3_root.is_file():
                 rel_path = file_path.name
             else:
@@ -164,7 +237,14 @@ class User3Exporter(
         return kept
 
     def _output_path_for(self, user3_file: Path) -> Path:
-        """Internal helper for output path for."""
+        """Compute the output path for path for.
+
+        Args:
+            user3_file (Path): Specific .user.3 file currently being processed.
+
+        Returns:
+            Path: Concrete filesystem path returned after the read, write, or resolution step finishes.
+        """
         if self.user3_root.is_file():
             relative_parent = Path()
         else:
