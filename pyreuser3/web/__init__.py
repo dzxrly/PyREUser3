@@ -1,4 +1,4 @@
-"""RE User3 JSON 转换器的本地 Vue Web UI。"""
+"""Local Vue Web UI package for RE User3 JSON conversion."""
 
 from .server import main, run_server
 from .settings import WebSettings

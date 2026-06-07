@@ -1,4 +1,4 @@
-"""本地 Vue Web UI 使用的 HTML、CSS 和 TypeScript 模板。"""
+"""Embedded HTML, CSS, and TypeScript templates for the local Web UI."""
 
 from __future__ import annotations
 

@@ -1,10 +1,4 @@
-"""完整 `.user.3` 文件结构解析逻辑。
-
-本模块按 RE Engine 的物理布局读取 ``.user.3``：先解析 USR 头与可选的外部
-用户数据路径表，再读取内嵌 RSZ 块的头部、对象表、实例表和用户数据表，最后
-逐个解析实例数据段。解析结果既可用于构造可读紧凑树，也可转成可稳定回封的
-完整实例表 JSON。
-"""
+"""Parser for the physical .user.3 USR and RSZ file layout."""
 
 from __future__ import annotations
 
@@ -15,25 +9,13 @@ from ..core import BinaryReader, PACK_JSON_FORMAT, ParseError, align
 
 
 class ExporterUser3ParserMixin:
-    """负责读取 USR/RSZ 头、实例表和根对象列表。"""
+    """Mixin for parsing complete .user.3 files."""
 
     def _parse_user3_document(self, user3_path: Path) -> dict[str, Any]:
-        """解析完整 `.user.3` 文件并保留实例表级中间结果。
-
-        参数：
-            user3_path (Path): 源 ``.user.3`` 文件路径。
-
-        返回：
-            dict[str, Any]: 解析文档，含 USR/RSZ 头、根对象编号、实例元数据、
-            已解析实例、实例编号映射以及用户数据引用等键，供后续构造紧凑树或
-            封包 JSON 使用。
-
-        异常：
-            ParseError: 当 USR 或 RSZ magic 不匹配时抛出。
-        """
+        """Internal helper for parse user3 document."""
         reader = BinaryReader(user3_path.read_bytes())
 
-        # `.user.3` 最外层是 USR 头，magic 可由用户覆盖以兼容不同游戏。
+        # Keep this implementation detail explicit.
         magic = reader.read_u32()
         if magic != self.user_magic:
             raise ParseError(f"not a user file: magic={magic}")
@@ -50,7 +32,7 @@ class ExporterUser3ParserMixin:
         header_userdata_infos: list[dict[str, Any]] = []
         if usr_header["userdata_count"] > 0 and usr_header["userdata_info_tbl"] > 0:
             try:
-                # 部分文件在 USR 头中带有外部 userdata 路径表。
+                # Keep path handling explicit to avoid ambiguous working directories.
                 reader.seek(usr_header["userdata_info_tbl"])
                 for idx in range(usr_header["userdata_count"]):
                     class_hash = reader.read_u32()
@@ -70,12 +52,12 @@ class ExporterUser3ParserMixin:
                         }
                     )
             except Exception:
-                # 路径表解析失败不影响主 RSZ 数据块，降级为空列表。
+                # Record per-file failures without stopping the whole batch.
                 header_userdata_infos = []
 
         rsz_start = usr_header["data_offset"]
 
-        # 数据偏移指向内嵌 RSZ 块；后续偏移大多是相对 RSZ 起点。
+        # Honor binary alignment and offset rules.
         reader.seek(rsz_start)
         rsz_header = {
             "magic": reader.read_u32(),
@@ -93,7 +75,7 @@ class ExporterUser3ParserMixin:
                 f"RSZ magic mismatch at data_offset: {rsz_header['magic']}"
             )
 
-        # 对象表保存根对象实例编号，是构造最终 JSON 根节点的首选来源。
+        # Keep instance references stable while parsing or packing data.
         reader.seek(rsz_start + 48)
         object_table = [
             reader.read_s32() for _i in range(max(rsz_header["object_count"], 0))
@@ -103,7 +85,7 @@ class ExporterUser3ParserMixin:
         instance_infos: list[dict[str, Any]] = []
         reader.seek(rsz_start + rsz_header["instance_offset"])
         for idx in range(max(rsz_header["instance_count"], 0)):
-            # 实例表只保存类型哈希和 CRC，真正字段数据在数据偏移后连续存放。
+            # Keep instance references stable while parsing or packing data.
             class_hash = reader.read_u32()
             crc = reader.read_u32()
             class_def = self.typedb.get_class(class_hash)
@@ -122,7 +104,7 @@ class ExporterUser3ParserMixin:
         rsz_userdata_path_by_instance: dict[int, str] = {}
         if rsz_header["userdata_count"] > 0 and rsz_header["userdata_offset"] > 0:
             try:
-                # RSZ 用户数据表表示对其他用户数据文件的引用。
+                # Keep instance references stable while parsing or packing data.
                 reader.seek(rsz_start + rsz_header["userdata_offset"])
                 for _i in range(rsz_header["userdata_count"]):
                     instance_id = reader.read_s32()
@@ -135,7 +117,7 @@ class ExporterUser3ParserMixin:
                             path = reader.read_wstring_null(rsz_start + path_offset)
                         rsz_userdata_path_by_instance[instance_id] = path
             except Exception:
-                # 用户数据表异常时仍尝试解析内联实例，避免整文件失败。
+                # Record per-file failures without stopping the whole batch.
                 rsz_userdata_instance_ids = []
                 rsz_userdata_path_by_instance = {}
         rsz_userdata_instance_set = set(rsz_userdata_instance_ids)
@@ -145,7 +127,7 @@ class ExporterUser3ParserMixin:
         for idx, info in enumerate(instance_infos):
             class_hash = int(info["hash"])
             if idx == 0:
-                # RSZ 实例 0 是固定空槽，引用 0 表示空引用。
+                # Keep instance references stable while parsing or packing data.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -155,7 +137,7 @@ class ExporterUser3ParserMixin:
                 )
                 continue
             if idx in rsz_userdata_instance_set:
-                # 外部用户数据引用不在当前数据段内展开，只记录路径和实例编号。
+                # Keep path handling explicit to avoid ambiguous working directories.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -167,7 +149,7 @@ class ExporterUser3ParserMixin:
                 continue
             cls = self.typedb.get_class(class_hash)
             if cls is None:
-                # 模板不认识的类型无法解析字段，但保留元数据方便定位。
+                # Preserve field layout details for binary compatibility.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -179,7 +161,7 @@ class ExporterUser3ParserMixin:
                 continue
             if cls.fields:
                 first = cls.fields[0]
-                # 实例数据没有显式尺寸，读取前按首字段对齐来同步游标。
+                # Keep instance references stable while parsing or packing data.
                 reader.seek(
                     align(reader.tell(), 4 if first.is_array else max(first.align, 1))
                 )
@@ -189,7 +171,7 @@ class ExporterUser3ParserMixin:
                     {"index": idx, "data": self._parse_instance(reader, class_hash)}
                 )
             except Exception as exc:
-                # 某个实例解析失败时，尽量按估算最小尺寸跳过，继续解析后续实例。
+                # Record per-file failures without stopping the whole batch.
                 parsed_instances.append(
                     {
                         "index": idx,
@@ -213,12 +195,12 @@ class ExporterUser3ParserMixin:
             set(i for i in object_table if isinstance(i, int) and i >= 0)
         )
         if not object_roots:
-            # 某些文件对象表为空，需要从引用关系推断根节点。
+            # Keep instance references stable while parsing or packing data.
             object_roots = self._infer_roots_when_object_table_empty(
                 idx_map, parsed_instances
             )
         if not object_roots and rsz_userdata_instance_ids:
-            # 如果只存在用户数据引用，也可把这些引用作为根节点导出。
+            # Keep instance references stable while parsing or packing data.
             object_roots = sorted(
                 set(
                     i
@@ -227,7 +209,7 @@ class ExporterUser3ParserMixin:
                 )
             )
         if not object_roots:
-            # 最后兜底：导出所有非空实例，保证信息尽可能不丢失。
+            # Keep instance references stable while parsing or packing data.
             object_roots = sorted(i for i in instance_info_map.keys() if i > 0)
 
         return {
@@ -245,29 +227,21 @@ class ExporterUser3ParserMixin:
         }
 
     def _parse_user3(self, user3_path: Path) -> list[dict[str, Any]]:
-        """解析完整 `.user.3` 文件并构造成紧凑对象树。
-
-        参数：
-            user3_path (Path): 源 ``.user.3`` 文件路径。
-
-        返回：
-            list[dict[str, Any]]: 以类名包裹的紧凑对象树列表；只含头部用户数据
-            信息的文件则返回可读的引用列表。
-        """
+        """Internal helper for parse user3."""
         document = self._parse_user3_document(user3_path)
         parsed_instances = document["parsed_instances"]
         object_roots = document["object_roots"]
         instance_info_map = document["instance_info_map"]
         idx_map = document["idx_map"]
         header_userdata_infos = document["header_userdata_infos"]
-        # depth 为 "auto" 时根据复杂度自动决定，否则使用用户指定的固定深度。
+        # Keep this implementation detail explicit.
         depth = (
             self._auto_pick_tree_depth(parsed_instances, object_roots)
             if self.tree_depth == "auto"
             else self.tree_depth
         )
         object_trees = [
-            # 从根实例开始展开引用，生成更适合人工修改的嵌套 JSON。
+            # Keep instance references stable while parsing or packing data.
             self._build_compact_tree(
                 root_idx,
                 idx_map,
@@ -278,7 +252,7 @@ class ExporterUser3ParserMixin:
             if root_idx in instance_info_map
         ]
         if not object_trees and header_userdata_infos:
-            # 对只包含头部用户数据信息的文件，仍返回可读的引用列表。
+            # Keep instance references stable while parsing or packing data.
             return [
                 {
                     item["class_name"]: {
@@ -291,27 +265,11 @@ class ExporterUser3ParserMixin:
         return object_trees
 
     def _parse_user3_pack(self, user3_path: Path) -> dict[str, Any]:
-        """解析 `.user.3` 并返回适合稳定封包的完整实例表 JSON。
-
-        参数：
-            user3_path (Path): 源 ``.user.3`` 文件路径。
-
-        返回：
-            dict[str, Any]: 完整实例表封包文档（见 :meth:`_build_pack_json`）。
-        """
+        """Internal helper for parse user3 pack."""
         return self._build_pack_json(self._parse_user3_document(user3_path))
 
     def _build_pack_json(self, document: dict[str, Any]) -> dict[str, Any]:
-        """把解析中间结果转换为完整实例表文档。
-
-        参数：
-            document (dict[str, Any]): :meth:`_parse_user3_document` 返回的解析文档。
-
-        返回：
-            dict[str, Any]: 封包格式文档，含 ``_format``、``_version``、``_source``、
-            ``_roots``、``_instances``、``_userdata``、``_unsupported``、``_warnings``
-            等键；其中 ``_unsupported`` 记录当前写回器尚不支持的原始数据段。
-        """
+        """Internal helper for build pack json."""
         instances: dict[str, Any] = {}
         warnings: list[str] = []
         unsupported: list[str] = []
@@ -320,7 +278,7 @@ class ExporterUser3ParserMixin:
         usr_header = document["usr_header"]
         rsz_header = document["rsz_header"]
 
-        # 记录当前最小写回器无法重建的原始数据段，封包阶段据此拒绝有损回封。
+        # Keep this implementation detail explicit.
         if int(usr_header.get("resource_count", 0)) > 0:
             unsupported.append("USR resource table")
         if int(usr_header.get("userdata_count", 0)) > 0:
@@ -341,7 +299,7 @@ class ExporterUser3ParserMixin:
             }
             inst = idx_map.get(idx)
             if idx == 0:
-                # 实例 0 是固定空槽，标记为 null 即可。
+                # Keep instance references stable while parsing or packing data.
                 entry["_class"] = None
                 entry["_kind"] = "null"
             elif inst is None:
@@ -369,7 +327,7 @@ class ExporterUser3ParserMixin:
                 fields = data.get("fields", {})
                 if not isinstance(fields, dict):
                     fields = {}
-                # 字段同样经过枚举后处理，使封包 JSON 中的枚举也呈现可读标签。
+                # Keep enum metadata consistent while converting values.
                 entry["fields"] = self._postprocess_enum_nodes(
                     fields,
                     current_class=class_name if isinstance(class_name, str) else None,
@@ -404,12 +362,5 @@ class ExporterUser3ParserMixin:
 
     @staticmethod
     def _format_hex_u32(value: int) -> str:
-        """把 32 位整数格式化为稳定的十六进制字符串。
-
-        参数：
-            value (int): 待格式化的整数（按无符号 32 位截断）。
-
-        返回：
-            str: 形如 ``0x0012abcd`` 的 8 位小写十六进制字符串。
-        """
+        """Internal helper for format hex u32."""
         return f"0x{value & 0xFFFFFFFF:08x}"

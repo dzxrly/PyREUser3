@@ -1,4 +1,4 @@
-"""`python -m pyreuser3.web` 的模块入口。"""
+"""Module entry point for python -m pyreuser3.web."""
 
 from .server import main
 
