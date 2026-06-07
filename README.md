@@ -1,6 +1,16 @@
-# PyREUser3
+<h1 align="center">PyREUser3</h1>
 
-English | [简体中文](./docs/README.zh-CN.md)
+<p align="center">
+  English | <a href="https://github.com/dzxrly/PyREUser3/blob/main/docs/README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI Project" src="https://img.shields.io/badge/PyPI-PyREUser3-blue"></a>
+  <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/PyREUser3"></a>
+  <a href="https://pypi.org/project/PyREUser3/"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/PyREUser3"></a>
+  <a href="https://pepy.tech/project/PyREUser3"><img alt="Downloads" src="https://static.pepy.tech/badge/PyREUser3"></a>
+  <a href="https://github.com/dzxrly/PyREUser3/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/pypi/l/PyREUser3"></a>
+</p>
 
 PyREUser3 is a pure Python package for converting RE Engine `.user.3` database files to JSON and packing compatible JSON back to `.user.3`.
 

@@ -1,6 +1,16 @@
-# PyREUser3
+<h1 align="center">PyREUser3</h1>
 
-[English](../README.md) | 简体中文
+<p align="center">
+  <a href="https://github.com/dzxrly/PyREUser3/blob/main/README.md">English</a> | 简体中文
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI 项目" src="https://img.shields.io/badge/PyPI-PyREUser3-blue"></a>
+  <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI 版本" src="https://img.shields.io/pypi/v/PyREUser3"></a>
+  <a href="https://pypi.org/project/PyREUser3/"><img alt="Python 版本" src="https://img.shields.io/pypi/pyversions/PyREUser3"></a>
+  <a href="https://pepy.tech/project/PyREUser3"><img alt="下载量" src="https://static.pepy.tech/badge/PyREUser3"></a>
+  <a href="https://github.com/dzxrly/PyREUser3/blob/main/LICENSE"><img alt="许可证" src="https://img.shields.io/pypi/l/PyREUser3"></a>
+</p>
 
 PyREUser3 是一个纯 Python 包，用于在 RE Engine 的 `.user.3` 数据库文件和 JSON 之间进行双向转换。
 
