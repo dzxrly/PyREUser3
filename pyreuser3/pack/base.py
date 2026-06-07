@@ -134,23 +134,23 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         with BatchProgress(
             "Packing user3", total=len(candidates), unit="file"
         ) as progress:
-            progress.log(f"发现 {len(candidates)} 个 JSON 文件。")
-            progress.log(f"使用模板: {self.schema_path}")
-            progress.log(f"输出目录: {target_root}")
+            progress.log(f"Found {len(candidates)} JSON file(s).")
+            progress.log(f"Schema: {self.schema_path}")
+            progress.log(f"Output directory: {target_root}")
             for json_file, rel in candidates:
                 total += 1
                 progress.update(advance=0, description=json_file.stem)
-                progress.log(f"开始封包 JSON: {rel}")
+                progress.log(f"Packing JSON: {rel}")
                 try:
                     # 单个文件失败不会终止整批任务，便于批量模组输出时逐个排查。
                     out_path = self.output_path_for(json_file, source_root, target_root)
                     self.pack_json_file(json_file, out_path)
                     success += 1
-                    progress.log(f"user3 封包完成: {out_path}", style="green")
+                    progress.log(f"user3 pack complete: {out_path}", style="green")
                 except Exception as exc:
                     failed += 1
                     error = f"{exc.__class__.__name__}: {exc}"
-                    progress.log(f"user3 封包失败: {json_file} ({error})", style="red")
+                    progress.log(f"user3 pack failed: {json_file} ({error})", style="red")
                 progress.update(1)
         return {"total": total, "success": success, "failed": failed}
 

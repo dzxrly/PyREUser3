@@ -34,7 +34,7 @@ def pick_path(payload: dict[str, Any]) -> dict[str, str]:
     from tkinter import filedialog
 
     kind = str(payload.get("kind", "file")).strip().lower()
-    title = str(payload.get("title", "请选择路径")).strip() or "请选择路径"
+    title = str(payload.get("title", "Select a path")).strip() or "Select a path"
     filetypes = _normalize_filetypes(payload.get("filetypes"))
 
     with _PICKER_LOCK:
@@ -60,7 +60,7 @@ def pick_path(payload: dict[str, Any]) -> dict[str, str]:
                     filetypes=filetypes,
                 )
             else:
-                raise ValueError("路径选择类型必须是 file 或 directory")
+                raise ValueError("path picker kind must be file or directory")
         finally:
             # 无论是否选择成功，都销毁临时根窗口，释放 GUI 资源。
             root.destroy()
@@ -79,7 +79,7 @@ def _normalize_filetypes(raw: Any) -> list[tuple[str, str]]:
         list[tuple[str, str]]: ``(标签, 通配符)`` 元组列表；输入非法时退回 ``[("所有文件", "*.*")]``。
     """
     if not isinstance(raw, list):
-        return [("所有文件", "*.*")]
+        return [("All files", "*.*")]
 
     out: list[tuple[str, str]] = []
     for item in raw:
@@ -89,4 +89,4 @@ def _normalize_filetypes(raw: Any) -> list[tuple[str, str]]:
         pattern = str(item[1]).strip()
         if label and pattern:
             out.append((label, pattern))
-    return out or [("所有文件", "*.*")]
+    return out or [("All files", "*.*")]

@@ -48,9 +48,9 @@ class ConversionRunners:
             FileNotFoundError: 当输入路径、模板或 dump 文件不存在时抛出。
         """
         # 先做参数解析和路径校验，保证常见输入错误能尽早以清晰文本返回。
-        input_dir = self._path_value(payload, "inputDir", "输入目录")
-        schema_path = self._path_value(payload, "schemaPath", "RE_RSZ 模板")
-        output_dir = self._path_value(payload, "outputDir", "JSON 输出目录")
+        input_dir = self._path_value(payload, "inputDir", "input path")
+        schema_path = self._path_value(payload, "schema path")
+        output_dir = self._path_value(payload, "output directory")
         il2cpp_dump_path = self._path_value(
             payload,
             "il2cppDumpPath",
@@ -62,20 +62,20 @@ class ConversionRunners:
         rsz_magic = self._magic(payload, "rszMagic", RSZ_MAGIC)
 
         # 输入文件或目录必须已存在；输出目录由底层导出器按需创建。
-        self._ensure_existing_path(input_dir, "输入目录或文件")
-        self._ensure_existing_file(schema_path, "RE_RSZ 模板")
+        self._ensure_existing_path(input_dir, "input path")
+        self._ensure_existing_file(schema_path, "schema path")
         self._ensure_existing_file(il2cpp_dump_path, "il2cpp_dump.json")
 
-        log(f"输入：{input_dir}")
-        log(f"模板：{schema_path}")
-        log(f"输出：{output_dir}")
+        log(f"Input: {input_dir}")
+        log(f"Schema: {schema_path}")
+        log(f"Output: {output_dir}")
         if exclude_regexes:
-            log(f"排除规则：{len(exclude_regexes)} 条")
+            log(f"Exclude regexes: {len(exclude_regexes)}")
 
         # 延迟导入核心导出器，避免仅启动 Web 服务或查看 --help 时加载 Rich。
         from ..export import User3Exporter
 
-        log("开始导出 .user.3 文件。")
+        log("Starting .user.3 export.")
         exporter = User3Exporter(
             user3_root=input_dir,
             schema_dir=schema_path,
@@ -87,7 +87,7 @@ class ConversionRunners:
             rsz_magic=rsz_magic,
         )
         user3_result = exporter.run()
-        log(f".user.3 导出完成：{json.dumps(user3_result, ensure_ascii=False)}")
+        log(f".user.3 export complete: {json.dumps(user3_result, ensure_ascii=False)}")
 
         # 结果结构保持简单，前端会自动汇总其中的 total/success/failed。
         return {"user3": user3_result, "outputDir": str(output_dir)}
@@ -108,7 +108,7 @@ class ConversionRunners:
         """
         path = Path(self._text_value(payload, key, label)).expanduser()
         if not path.is_absolute():
-            raise ValueError(f"{label}必须通过选择按钮提供绝对路径")
+            raise ValueError(f"{label} must be selected as an absolute path")
         return path
 
     @staticmethod
@@ -128,10 +128,10 @@ class ConversionRunners:
         """
         value = payload.get(key)
         if value is None:
-            raise ValueError(f"缺少参数：{label}")
+            raise ValueError(f"missing required value: {label}")
         text = str(value).strip().strip('"')
         if not text:
-            raise ValueError(f"缺少参数：{label}")
+            raise ValueError(f"missing required value: {label}")
         return text
 
     @staticmethod
@@ -165,7 +165,7 @@ class ConversionRunners:
             FileNotFoundError: 当路径不存在时抛出。
         """
         if not path.exists():
-            raise FileNotFoundError(f"{label}不存在：{path}")
+            raise FileNotFoundError(f"{label} does not exist: {path}")
 
     @staticmethod
     def _ensure_existing_file(path: Path, label: str) -> None:
@@ -182,7 +182,7 @@ class ConversionRunners:
             FileNotFoundError: 当路径不存在或不是文件时抛出。
         """
         if not path.is_file():
-            raise FileNotFoundError(f"{label}不存在或不是文件：{path}")
+            raise FileNotFoundError(f"{label} does not exist or is not a file: {path}")
 
     @staticmethod
     def _exclude_regexes(payload: dict[str, Any]) -> list[str]:
@@ -217,7 +217,7 @@ class ConversionRunners:
             return "auto"
         value = int(raw, 0)
         if value < 0:
-            raise ValueError("tree-depth 必须为非负整数或 auto")
+            raise ValueError("tree-depth must be a non-negative integer or auto")
         return value
 
     @staticmethod

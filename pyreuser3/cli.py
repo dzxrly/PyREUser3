@@ -8,9 +8,6 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Sequence
 
 from .core import RSZ_MAGIC, USR_MAGIC
-from .export import User3Exporter
-from .pack import User3Packer
-from .rich_ui import get_console
 
 
 def parse_int_arg(value: str) -> int:
@@ -159,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_export(args: argparse.Namespace) -> int:
     """Run the export subcommand."""
+    from .export import User3Exporter
+    from .rich_ui import get_console
+
     console = get_console()
     console.log("Exporting .user.3 files to JSON...")
     exporter = User3Exporter(
@@ -178,6 +178,9 @@ def run_export(args: argparse.Namespace) -> int:
 
 def run_pack(args: argparse.Namespace) -> int:
     """Run the pack subcommand."""
+    from .pack import User3Packer
+    from .rich_ui import get_console
+
     console = get_console()
     console.log("Packing JSON files to .user.3...")
     packer = User3Packer(

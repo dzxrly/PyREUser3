@@ -70,7 +70,7 @@ def make_handler(
                 # 任务详情包含日志，用于右侧日志面板刷新。
                 self._handle_job(path.rsplit("/", 1)[-1])
                 return
-            self._send_json(404, {"error": "未找到请求路径"})
+            self._send_json(404, {"error": "request path not found"})
 
         def do_POST(self) -> None:
             """处理路径选择和导出任务提交的 POST 请求。
@@ -90,7 +90,7 @@ def make_handler(
                     job = jobs.start("export", payload, runners.run_export)
                     self._send_json(202, {"jobId": job.id})
                     return
-                self._send_json(404, {"error": "未找到请求路径"})
+                self._send_json(404, {"error": "request path not found"})
             except Exception as exc:
                 # 请求体解析失败或参数结构异常时直接返回 400。
                 self._send_json(400, {"error": f"{exc.__class__.__name__}: {exc}"})
@@ -110,7 +110,7 @@ def make_handler(
                 return {}
             data = json.loads(raw.decode("utf-8"))
             if not isinstance(data, dict):
-                raise ValueError("请求体必须是 JSON 对象")
+                raise ValueError("request body must be a JSON object")
             return data
 
         def _handle_jobs(self) -> None:
@@ -138,7 +138,7 @@ def make_handler(
             """
             job = jobs.get(job_id)
             if job is None:
-                self._send_json(404, {"error": "任务不存在"})
+                self._send_json(404, {"error": "job not found"})
                 return
             self._send_json(200, {"job": jobs.serialize(job, include_logs=True)})
 

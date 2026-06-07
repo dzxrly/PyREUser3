@@ -153,7 +153,7 @@ class JobStore:
             None: 通过更新任务状态/日志反馈执行结果。
         """
         self._set_job(job.id, status="running")
-        self._log(job.id, "任务已启动。")
+        self._log(job.id, "Job started.")
         try:
             # runner 接收一个日志回调，便于转换流程把阶段性信息写回任务。
             result = runner(payload, lambda message: self._log(job.id, message))
@@ -161,10 +161,10 @@ class JobStore:
             # 单个任务失败只更新任务状态，不影响 HTTP 服务和其他任务。
             error = f"{exc.__class__.__name__}: {exc}"
             self._set_job(job.id, status="failed", error=error)
-            self._log(job.id, f"任务失败：{error}")
+            self._log(job.id, f"Job failed: {error}")
             return
         self._set_job(job.id, status="done", result=result)
-        self._log(job.id, "任务完成。")
+        self._log(job.id, "Job complete.")
 
     def _set_job(self, job_id: str, **changes: Any) -> None:
         """在锁内更新任务字段。

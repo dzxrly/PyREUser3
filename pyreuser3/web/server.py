@@ -46,13 +46,13 @@ def run_server(settings: WebSettings) -> None:
 
     server = ReusableThreadingHTTPServer((settings.host, settings.port), handler)
     url = f"http://{settings.host}:{settings.port}/"
-    print(f"RE User3 JSON Web 正在运行：{url}")
-    print("网页路径不会自动使用项目根目录，请在页面中手动选择。")
-    print("按 Ctrl+C 停止服务。")
+    print(f"RE User3 JSON Web is running at: {url}")
+    print("Web form paths are not inferred from the project root; select them manually.")
+    print("Press Ctrl+C to stop the server.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n正在停止服务...")
+        print("\nStopping server...")
     finally:
         # 无论正常退出还是异常中断，都关闭服务释放端口。
         server.server_close()
@@ -67,19 +67,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     返回：
         argparse.Namespace: 含 ``host``、``port``、``root_dir``、``max_jobs`` 的解析结果。
     """
-    parser = argparse.ArgumentParser(description="启动本地 Vue Web UI。")
-    parser.add_argument("--host", default="127.0.0.1", help="监听主机。")
-    parser.add_argument("--port", type=int, default=8765, help="监听端口。")
+    parser = argparse.ArgumentParser(description="Start the local Vue Web UI.")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to listen on.")
+    parser.add_argument("--port", type=int, default=8765, help="Port to listen on.")
     parser.add_argument(
         "--root-dir",
         default=str(Path.cwd()),
-        help="兼容配置；网页路径仍需通过选择按钮提供绝对路径。",
+        help="Compatibility setting; Web form paths must still be selected as absolute paths.",
     )
     parser.add_argument(
         "--max-jobs",
         type=int,
         default=50,
-        help="内存中保留的最大任务数量。",
+        help="Maximum number of jobs to keep in memory.",
     )
     return parser.parse_args(argv)
 

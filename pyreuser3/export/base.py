@@ -113,20 +113,20 @@ class User3Exporter(
         with BatchProgress(
             "Exporting user3", total=len(files), unit="file"
         ) as progress:
-            progress.log(f"发现 {len(files)} 个 .user.3 文件。")
-            progress.log(f"使用模板: {self.schema_path}")
-            progress.log(f"输出目录: {self.output_root}")
+            progress.log(f"Found {len(files)} .user.3 file(s).")
+            progress.log(f"Schema: {self.schema_path}")
+            progress.log(f"Output directory: {self.output_root}")
             for user3_file in files:
                 label = user3_file.name.replace(".user.3", "")
                 progress.update(advance=0, description=label)
-                progress.log(f"开始导出 user3: {user3_file}")
+                progress.log(f"Exporting user3: {user3_file}")
                 ok, output_path, error = self._export_one_file(user3_file)
                 if ok:
                     success += 1
-                    progress.log(f"user3 导出完成: {output_path}", style="green")
+                    progress.log(f"user3 export complete: {output_path}", style="green")
                 else:
                     failed += 1
-                    progress.log(f"user3 导出失败: {user3_file} ({error})", style="red")
+                    progress.log(f"user3 export failed: {user3_file} ({error})", style="red")
                 progress.update(1)
 
         return {"total": len(files), "success": success, "failed": failed}
