@@ -1,8 +1,8 @@
 # PyREUser3
 
-PyREUser3 is a pure Python package for converting RE Engine `.user.3` database files to JSON and packing compatible JSON back to `.user.3`.
+English | [简体中文](./docs/README.zh-CN.md)
 
-Simplified Chinese documentation is available at [docs/README.zh-CN.md](docs/README.zh-CN.md).
+PyREUser3 is a pure Python package for converting RE Engine `.user.3` database files to JSON and packing compatible JSON back to `.user.3`.
 
 Install it with:
 

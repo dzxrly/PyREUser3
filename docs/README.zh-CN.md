@@ -1,5 +1,7 @@
 # PyREUser3
 
+[English](../README.md) | 简体中文
+
 PyREUser3 是一个纯 Python 包，用于在 RE Engine 的 `.user.3` 数据库文件和 JSON 之间进行双向转换。
 
 它的发布包名是 `PyREUser3`，安装时可以使用规范化后的名称：
