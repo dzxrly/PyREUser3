@@ -7,7 +7,6 @@
 <p align="center">
   <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI 项目" src="https://img.shields.io/badge/PyPI-PyREUser3-blue"></a>
   <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI 版本" src="https://img.shields.io/pypi/v/PyREUser3"></a>
-  <a href="https://pypi.org/project/PyREUser3/"><img alt="Python 版本" src="https://img.shields.io/pypi/pyversions/PyREUser3"></a>
   <a href="https://pepy.tech/project/PyREUser3"><img alt="下载量" src="https://static.pepy.tech/badge/PyREUser3"></a>
   <a href="https://github.com/dzxrly/PyREUser3/blob/main/LICENSE"><img alt="许可证" src="https://img.shields.io/pypi/l/PyREUser3"></a>
 </p>
@@ -124,6 +123,22 @@ converter.pack_file(
     "mod/OtomonData.user.3",
 )
 ```
+
+不写入 JSON 文件，直接把 `.user.3` 转成内存中的 JSON 兼容 Python 对象：
+
+```python
+readable_data = converter.user3_to_json(
+    "input/OtomonData.user.3",
+    json_format="readable",
+)
+
+repack_data = converter.user3_to_json(
+    "input/OtomonData.user.3",
+    json_format="repack",
+)
+```
+
+使用 `json_format="readable"` 时返回与 `export_file()` 一致的可读导出结构；使用 `json_format="repack"` 时返回可传给 `pack()` 的完整实例表结构。
 
 批量处理目录：
 
