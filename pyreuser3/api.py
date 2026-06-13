@@ -11,7 +11,7 @@ import inspect
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Literal, Optional
 
 from .core import RSZ_MAGIC, USR_MAGIC
 from .export import User3Exporter
@@ -20,6 +20,7 @@ from .pack import User3Packer
 # Preserve the exported JSON structure so external scripts and hand-edited files remain
 # compatible across workflows.
 JsonTree = Any
+JsonFormat = Literal["readable", "repack"]
 # Patch callbacks may accept only the parsed data or both the data and source
 # path; returning None means the callback mutated in place.
 PatchCallback = Callable[..., Optional[JsonTree]]
@@ -104,13 +105,48 @@ class REUser3Converter:
         # Reuse parse_file so single-file and batch exports keep the same parsed JSON shape and metadata handling.
         # Preserve the exported JSON structure so external scripts and hand-edited files
         # remain compatible across workflows.
-        tree = self.parse_file(user3_path, round_floats=True)
+        tree = self.user3_to_json(
+            user3_path,
+            json_format="readable",
+            round_floats=True,
+        )
         target = Path(json_path)
         target.parent.mkdir(parents=True, exist_ok=True)
 
         with target.open("w", encoding="utf-8") as f:
             json.dump(tree, f, ensure_ascii=False, indent=2)
         return target
+
+    def user3_to_json(
+        self,
+        user3_path: str | Path,
+        json_format: JsonFormat = "readable",
+        round_floats: bool = True,
+    ) -> JsonTree:
+        """Convert one .user.3 file to an in-memory JSON-compatible tree.
+
+        Args:
+            user3_path (str | Path): Path to the .user.3 file being parsed.
+            json_format (JsonFormat): Return "readable" for the same shape written by
+            export_file(), or "repack" for the full instance-table document accepted by
+            pack().
+            round_floats (bool): Whether readable-format floats should be rounded to four
+            decimal places.
+
+        Returns:
+            JsonTree: JSON-compatible Python data. The readable format preserves the
+            existing export shape; the repack format returns a dictionary with pack
+            metadata and instance tables.
+
+        Raises:
+            ValueError: json_format was not "readable" or "repack".
+        """
+        normalized_format = self._normalize_json_format(json_format)
+        if normalized_format == "readable":
+            return self.parse_file(user3_path, round_floats=round_floats)
+        if normalized_format == "repack":
+            return self.parse_pack_file(user3_path)
+        raise ValueError("json_format must be 'readable' or 'repack'")
 
     def parse_file(self, user3_path: str | Path, round_floats: bool = True) -> JsonTree:
         """Parse one .user.3 file into the compact exported JSON tree.
@@ -146,6 +182,23 @@ class REUser3Converter:
         exporter = self._new_exporter(user3_path, Path.cwd(), [])
         self._prepare_exporter_metadata(exporter)
         return exporter._parse_user3_pack(Path(user3_path))
+
+    @staticmethod
+    def _normalize_json_format(json_format: str) -> str:
+        """Normalize the public in-memory JSON format selector.
+
+        Args:
+            json_format (str): Requested JSON output shape.
+
+        Returns:
+            str: Normalized format name.
+
+        Raises:
+            TypeError: The caller supplied a non-string format selector.
+        """
+        if not isinstance(json_format, str):
+            raise TypeError("json_format must be a string")
+        return json_format.strip().lower().replace("-", "_")
 
     def pack_directory(
         self,

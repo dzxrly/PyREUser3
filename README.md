@@ -7,7 +7,6 @@
 <p align="center">
   <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI Project" src="https://img.shields.io/badge/PyPI-PyREUser3-blue"></a>
   <a href="https://pypi.org/project/PyREUser3/"><img alt="PyPI Version" src="https://img.shields.io/pypi/v/PyREUser3"></a>
-  <a href="https://pypi.org/project/PyREUser3/"><img alt="Python Versions" src="https://img.shields.io/pypi/pyversions/PyREUser3"></a>
   <a href="https://pepy.tech/project/PyREUser3"><img alt="Downloads" src="https://static.pepy.tech/badge/PyREUser3"></a>
   <a href="https://github.com/dzxrly/PyREUser3/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/pypi/l/PyREUser3"></a>
 </p>
@@ -95,6 +94,22 @@ converter.pack_file(
     "mod/OtomonData.user.3",
 )
 ```
+
+Convert a `.user.3` file to an in-memory JSON-compatible Python object without writing a JSON file:
+
+```python
+readable_data = converter.user3_to_json(
+    "input/OtomonData.user.3",
+    json_format="readable",
+)
+
+repack_data = converter.user3_to_json(
+    "input/OtomonData.user.3",
+    json_format="repack",
+)
+```
+
+Use `json_format="readable"` for the same shape produced by `export_file()`, or `json_format="repack"` for the full instance-table document accepted by `pack()`.
 
 For stable patch-and-repack workflows, use `patch_file()` or `parse_pack_file()`:
 
