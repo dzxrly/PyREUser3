@@ -16,7 +16,9 @@ pip install pyreuser3
 - CLI commands through `pyreuser3`.
 - A local `.user.3` export Web UI through `pyreuser3-web`.
 
-The published package intentionally does not include game resources, dumped game data, RE_RSZ templates, `il2cpp_dump.json`, `.msg.23` conversion tools, or repository-specific helper scripts. You need to provide data files that match the target game and version.
+The published package intentionally does not include game resources, dumped game data, RE_RSZ templates,
+`il2cpp_dump.json`, or repository-specific helper scripts. You need to provide data files that match the target game and
+version.
 
 ## Requirements
 
