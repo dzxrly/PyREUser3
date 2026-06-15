@@ -35,7 +35,7 @@ PyREUser3 当前提供：
 - `pyreuser3` 命令行工具；
 - `pyreuser3-web` 本地 Web 导出界面。
 
-PyPI 包不会包含游戏资源、游戏 dump、RE_RSZ 模板、`il2cpp_dump.json`、`.msg.23` 转换工具或特定仓库脚本。调用方需要自己准备与目标游戏版本匹配的数据文件。
+PyPI 包不会包含游戏资源、游戏 dump、RE_RSZ 模板、`il2cpp_dump.json`、或特定仓库脚本。调用方需要自己准备与目标游戏版本匹配的数据文件。
 
 ## 环境要求
 
@@ -99,7 +99,7 @@ pyreuser3-web --port 8765
 http://127.0.0.1:8765/
 ```
 
-Web UI 只提供 `.user.3` 导出，不提供 JSON 封包，也不提供 `.msg.23` 转换。
+Web UI 只提供 `.user.3` 导出，不提供 JSON 封包。
 
 ## Python API
 

@@ -33,7 +33,8 @@ from pyreuser3 import REUser3Converter
 - CLI commands through `pyreuser3`.
 - A local `.user.3` export Web UI through `pyreuser3-web`.
 
-This PyPI package intentionally does not include game resources, dumped game data, RE_RSZ templates, `il2cpp_dump.json`, `.msg.23` conversion tools, or repository-specific helper scripts.
+This PyPI package intentionally does not include game resources, dumped game data, RE_RSZ templates, `il2cpp_dump.json`,
+or repository-specific helper scripts.
 
 ## Requirements
 
@@ -72,7 +73,7 @@ Start the local `.user.3` export Web UI:
 pyreuser3-web --port 8765
 ```
 
-The Web UI only handles `.user.3` export. It does not pack files and does not provide `.msg.23` conversion.
+The Web UI only handles `.user.3` export. It does not pack files.
 
 ## Python API
 
