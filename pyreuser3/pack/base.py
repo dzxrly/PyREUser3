@@ -64,6 +64,7 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         self.rsz_magic = int(rsz_magic)
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
+        self.enum_underlying_types: dict[str, str] = {}
         self.enum_lookup = self._load_enum_lookup()
         self.member_lookup = self._build_member_lookup()
         self.instances: list[InstanceSpec | None] = []
@@ -244,8 +245,14 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         """
         raw: dict[str, Any] | None = None
         if self.il2cpp_dump_path is not None:
-            with self.il2cpp_dump_path.open("r", encoding="utf-8") as f:
-                raw = User3Exporter.export_enums_internal(json.load(f))
+            raw, enum_context = User3Exporter.export_il2cpp_metadata_from_path(
+                self.il2cpp_dump_path
+            )
+            enum_underlying_types = enum_context.get("enum_underlying_types")
+            if isinstance(enum_underlying_types, dict):
+                for enum_name, storage_type in enum_underlying_types.items():
+                    if isinstance(enum_name, str) and isinstance(storage_type, str):
+                        self.enum_underlying_types[enum_name] = storage_type
         if not isinstance(raw, dict):
             return {}
 
@@ -260,6 +267,7 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
                 entry = (member_name, raw_value)
                 # Preserve the exported JSON structure so external scripts and hand-
                 # edited files remain compatible across workflows.
+                value_map[raw_value] = entry
                 value_map[self._to_s32(raw_value)] = entry
                 value_map[self._to_u32(raw_value)] = entry
             if value_map:

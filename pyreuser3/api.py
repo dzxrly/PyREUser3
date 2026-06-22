@@ -402,17 +402,16 @@ class REUser3Converter:
         """
         if self.il2cpp_dump_path is None or not self.il2cpp_dump_path.is_file():
             raise FileNotFoundError("il2cpp_dump_path is required for parsing JSON")
-        with self.il2cpp_dump_path.open("r", encoding="utf-8") as f:
-            il2cpp_dump = json.load(f)
         # Batch export writes Enums_Internal.json for downstream tools; direct
         # parsing keeps the same lookup only in memory.
         # Keep the generated metadata attached to the exporter so field parsing can
         # format enum names consistently.
-        enums_internal = exporter.export_enums_internal(il2cpp_dump)
+        enums_internal, enum_context = exporter.export_il2cpp_metadata_from_path(
+            self.il2cpp_dump_path
+        )
         exporter.enum_lookup = exporter._build_enum_lookup_from_enums_internal(
             enums_internal
         )
-        enum_context = exporter.export_enum_context_internal(il2cpp_dump)
         exporter._apply_enum_context(enum_context)
         exporter._ensure_enum_lookup()
 
