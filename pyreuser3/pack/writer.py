@@ -10,8 +10,8 @@ import re
 import uuid
 from typing import Any
 
-from .models import BinaryWriter, InstanceRef, PackError, StructValue
-from ..core import align
+from .models import BinaryWriter, InstanceRef, InstanceSpec, PackError, StructValue
+from ..core import align, enum_storage_type_from_size
 from ..schema import FieldDef
 
 # Register enum values through the shared lookup tables so readable labels and numeric
@@ -174,8 +174,11 @@ class PackerWriterMixin:
         if t == "U16":
             writer.write_struct("<H", self._coerce_int(value, field_def) & 0xFFFF)
             return
-        if t in {"S32", "Enum", "Sfix"}:
+        if t in {"S32", "Sfix"}:
             writer.write_struct("<i", self._to_s32(self._coerce_int(value, field_def)))
+            return
+        if t == "Enum":
+            self._write_enum_value(writer, field_def, value)
             return
         if t == "U32":
             writer.write_struct("<I", self._coerce_int(value, field_def) & 0xFFFFFFFF)
@@ -255,6 +258,55 @@ class PackerWriterMixin:
         # Follow schema field layout exactly so alignment, padding, and unknown data
         # remain binary-compatible.
         writer.write(b"\x00" * max(field_def.size, 0))
+
+    def _enum_type_candidates_for_field(self, field_def: FieldDef) -> list[str]:
+        """Yield enum metadata candidates for one schema field."""
+        original = field_def.original_type
+        candidates = [original] if isinstance(original, str) and original else []
+        if isinstance(original, str) and original.endswith("_Serializable"):
+            candidates.append(f"{original[:-13]}_Fixed")
+        if isinstance(original, str) and "Serializable" in original:
+            candidates.append(original.replace("Serializable", "Fixed"))
+        if isinstance(original, str) and original.endswith("_Fixed"):
+            candidates.append(original)
+        return list(dict.fromkeys(candidates))
+
+    def _enum_storage_type_for_field(self, field_def: FieldDef) -> str:
+        """Resolve enum storage type from il2cpp metadata or schema size."""
+        for candidate in self._enum_type_candidates_for_field(field_def):
+            storage_type = self.enum_underlying_types.get(candidate)
+            if storage_type is not None:
+                return storage_type
+        return enum_storage_type_from_size(field_def.size)
+
+    def _write_enum_value(
+        self, writer: BinaryWriter, field_def: FieldDef, value: Any
+    ) -> None:
+        """Write an enum using its il2cpp underlying type or schema width."""
+        int_value = self._coerce_int(value, field_def)
+        storage_type = self._enum_storage_type_for_field(field_def)
+        if storage_type == "S8":
+            writer.write_struct("<b", int_value)
+            return
+        if storage_type == "U8":
+            writer.write_struct("<B", int_value & 0xFF)
+            return
+        if storage_type == "S16":
+            writer.write_struct("<h", int_value)
+            return
+        if storage_type == "U16":
+            writer.write_struct("<H", int_value & 0xFFFF)
+            return
+        if storage_type == "U32":
+            writer.write_struct("<I", int_value & 0xFFFFFFFF)
+            return
+        if storage_type == "S64":
+            writer.write_struct("<q", int_value)
+            return
+        if storage_type == "U64":
+            writer.write_struct("<Q", int_value & 0xFFFFFFFFFFFFFFFF)
+            return
+        writer.write_struct("<i", self._to_s32(int_value))
 
     def _write_struct(self, writer: BinaryWriter, value: Any) -> None:
         """Write struct.
@@ -337,13 +389,7 @@ class PackerWriterMixin:
         Returns:
             int | None: Resolved numeric value, or None when the source cannot be mapped.
         """
-        candidates = []
-        original = field_def.original_type
-        if original.endswith("_Serializable"):
-            candidates.append(f"{original[:-13]}_Fixed")
-        if original.endswith("_Fixed"):
-            candidates.append(original)
-        for enum_type in candidates:
+        for enum_type in self._enum_type_candidates_for_field(field_def):
             member_map = self.member_lookup.get(enum_type)
             if member_map and text in member_map:
                 return member_map[text]

@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ..core import ParseError
+from ..core import ParseError, enum_storage_type_from_size
 from ..rich_ui import get_console
 
 
@@ -88,7 +88,6 @@ class ExporterMetadataMixin:
             if (
                 not isinstance(enum_type, str)
                 or not isinstance(members, dict)
-                or not enum_type.endswith("_Fixed")
             ):
                 continue
             value_map: dict[int, tuple[str, int]] = {}
@@ -100,6 +99,7 @@ class ExporterMetadataMixin:
                 # edited files remain compatible across workflows.
                 # Register enum values through the shared lookup tables so readable
                 # labels and numeric packing stay reversible.
+                value_map[raw_value] = entry
                 value_map[self._to_s32(raw_value)] = entry
                 value_map[self._to_u32(raw_value)] = entry
             if value_map:
@@ -147,14 +147,15 @@ class ExporterMetadataMixin:
                 f"il2cpp_dump.json not found: {self.il2cpp_dump_path}"
             )
         try:
-            with dump_path.open("r", encoding="utf-8") as f:
-                il2cpp_dump = json.load(f)
+            enums_internal, enum_context = self.export_il2cpp_metadata_from_path(
+                dump_path
+            )
         except Exception as exc:
             raise ParseError(f"failed to read il2cpp dump: {dump_path}") from exc
 
         self.output_root.mkdir(parents=True, exist_ok=True)
         enums_out = self.output_root / "Enums_Internal.json"
-        enums_internal = self.export_enums_internal(il2cpp_dump)
+        self._pending_enum_context = enum_context
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
         with enums_out.open("w", encoding="utf-8") as f:
@@ -232,6 +233,7 @@ class ExporterMetadataMixin:
         self.serializable_to_fixed = {}
         self.generic_container_rules = {}
         self.param_type_default_enum = {}
+        self.enum_underlying_types = {}
 
         class_field_fixed_types = raw.get("class_field_fixed_types")
         if isinstance(class_field_fixed_types, dict):
@@ -245,11 +247,20 @@ class ExporterMetadataMixin:
                     if (
                         isinstance(field_name, str)
                         and isinstance(enum_type, str)
-                        and enum_type.endswith("_Fixed")
                     ):
                         cleaned[field_name] = enum_type
                 if cleaned:
                     self.class_field_fixed_types[cls_name] = cleaned
+
+        enum_underlying_types = raw.get("enum_underlying_types")
+        if isinstance(enum_underlying_types, dict):
+            for enum_name, storage_type in enum_underlying_types.items():
+                if (
+                    isinstance(enum_name, str)
+                    and isinstance(storage_type, str)
+                    and storage_type in {"S8", "U8", "S16", "U16", "S32", "U32", "S64", "U64"}
+                ):
+                    self.enum_underlying_types[enum_name] = storage_type
 
         serializable_to_fixed = raw.get("serializable_to_fixed")
         if isinstance(serializable_to_fixed, dict):
@@ -288,6 +299,55 @@ class ExporterMetadataMixin:
                 # labels and numeric packing stay reversible.
                 self.param_type_default_enum[param_type] = next(iter(enum_types))
 
+    def _enum_type_candidates_for_lookup(self, type_name: str) -> list[str]:
+        """Yield enum lookup candidates for schema or il2cpp type names."""
+        candidates = [type_name]
+        direct = self.serializable_to_fixed.get(type_name)
+        if direct is not None:
+            candidates.append(direct)
+        if type_name.endswith("_Serializable"):
+            candidates.append(f"{type_name[:-13]}_Fixed")
+        if "Serializable" in type_name:
+            candidates.append(type_name.replace("Serializable", "Fixed"))
+        return list(dict.fromkeys(candidates))
+
+    def _resolve_enum_type_for_lookup(self, type_name: str) -> str | None:
+        """Resolve a schema enum type name to an available enum lookup key."""
+        if not isinstance(type_name, str) or not type_name:
+            return None
+        for candidate in self._enum_type_candidates_for_lookup(type_name):
+            if candidate in self.enum_lookup:
+                return candidate
+        return None
+
+    def _resolve_enum_storage_type(self, field: Any) -> str:
+        """Resolve enum storage width from il2cpp metadata or schema size."""
+        original_type = getattr(field, "original_type", "")
+        if isinstance(original_type, str):
+            for candidate in self._enum_type_candidates_for_lookup(original_type):
+                storage_type = self.enum_underlying_types.get(candidate)
+                if storage_type is not None:
+                    return storage_type
+        return enum_storage_type_from_size(int(getattr(field, "size", 0) or 0))
+
+    def _apply_schema_enum_context(self) -> None:
+        """Register ordinary schema Enum fields as enum-formatting hints."""
+        typedb = getattr(self, "typedb", None)
+        enum_lookup = getattr(self, "enum_lookup", None)
+        if typedb is None or not enum_lookup:
+            return
+
+        for class_def in typedb.classes.values():
+            field_map = self.class_field_fixed_types.setdefault(class_def.name, {})
+            for field in class_def.fields:
+                if field.field_type != "Enum":
+                    continue
+                enum_type = self._resolve_enum_type_for_lookup(field.original_type)
+                if enum_type is not None:
+                    field_map.setdefault(field.name or "unnamed", enum_type)
+            if not field_map:
+                self.class_field_fixed_types.pop(class_def.name, None)
+
     def _load_enum_context_from_il2cpp_dump(self) -> bool:
         """Load enum context from il2cpp dump.
 
@@ -297,16 +357,22 @@ class ExporterMetadataMixin:
         Returns:
             bool: True when the inspected value matches the expected schema or metadata pattern; otherwise False.
         """
+        pending_context = getattr(self, "_pending_enum_context", None)
+        if isinstance(pending_context, dict):
+            self._apply_enum_context(pending_context)
+            self._apply_schema_enum_context()
+            self._pending_enum_context = None
+            return True
+
         dump_path = self._resolve_il2cpp_dump_path()
         if dump_path is None:
             return False
         try:
-            with dump_path.open("r", encoding="utf-8") as f:
-                il2cpp_dump = json.load(f)
+            context = self.export_enum_context_from_il2cpp_dump_path(dump_path)
         except Exception:
             return False
-        context = self.export_enum_context_internal(il2cpp_dump)
         self._apply_enum_context(context)
+        self._apply_schema_enum_context()
         return True
 
     def _ensure_enum_lookup(self) -> None:
@@ -319,6 +385,7 @@ class ExporterMetadataMixin:
             None. The method performs its documented side effect in place and raises on invalid input.
         """
         if self.enum_lookup:
+            self._apply_schema_enum_context()
             self._rebuild_enum_member_index()
             return
         self._rebuild_enum_member_index()

@@ -15,6 +15,8 @@ from ..core import (
     read_guid_like,
     read_len_c8,
     read_len_utf16,
+    enum_storage_size,
+    enum_storage_type_from_size,
 )
 from ..schema import ClassDef, FieldDef
 
@@ -55,7 +57,7 @@ class ExporterFieldParserMixin:
         if t in ("S32", "Sfix"):
             return reader.read_s32()
         if t == "Enum":
-            return reader.read_s32()
+            return self._read_enum_value(reader, field)
         if t == "U32":
             return reader.read_u32()
         if t == "S64":
@@ -143,6 +145,32 @@ class ExporterFieldParserMixin:
         # inspectable instead of silently discarding data.
         return {"raw": reader.read(to_read).hex(), "type": t}
 
+    def _enum_storage_type_for_field(self, field: FieldDef) -> str:
+        """Resolve the binary storage type used by an enum field."""
+        resolver = getattr(self, "_resolve_enum_storage_type", None)
+        if callable(resolver):
+            return resolver(field)
+        return enum_storage_type_from_size(field.size)
+
+    def _read_enum_value(self, reader: BinaryReader, field: FieldDef) -> int:
+        """Read an enum using its il2cpp underlying type or schema-declared width."""
+        storage_type = self._enum_storage_type_for_field(field)
+        if storage_type == "S8":
+            return reader.read_s8()
+        if storage_type == "U8":
+            return reader.read_u8()
+        if storage_type == "S16":
+            return reader.read_s16()
+        if storage_type == "U16":
+            return reader.read_u16()
+        if storage_type == "U32":
+            return reader.read_u32()
+        if storage_type == "S64":
+            return reader.read_s64()
+        if storage_type == "U64":
+            return reader.read_u64()
+        return reader.read_s32()
+
     def _parse_field_value(
         self, reader: BinaryReader, field: FieldDef, depth: int = 0
     ) -> Any:
@@ -212,7 +240,9 @@ class ExporterFieldParserMixin:
                 pos += 1
             elif t in ("S16", "U16"):
                 pos += 2
-            elif t in ("S32", "U32", "Enum", "Sfix", "F32"):
+            elif t == "Enum":
+                pos += enum_storage_size(self._enum_storage_type_for_field(field))
+            elif t in ("S32", "U32", "Sfix", "F32"):
                 pos += 4
             elif t in ("S64", "U64", "F64"):
                 pos += 8

@@ -28,6 +28,41 @@ HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 # packing stay reversible.
 ENUM_UNUSED_KEY = "value__"
 
+ENUM_UNDERLYING_TYPE_MAP = {
+    "byte": "U8",
+    "system.byte": "U8",
+    "u8": "U8",
+    "uint8": "U8",
+    "sbyte": "S8",
+    "system.sbyte": "S8",
+    "s8": "S8",
+    "int8": "S8",
+    "short": "S16",
+    "system.int16": "S16",
+    "int16": "S16",
+    "s16": "S16",
+    "ushort": "U16",
+    "system.uint16": "U16",
+    "uint16": "U16",
+    "u16": "U16",
+    "int": "S32",
+    "system.int32": "S32",
+    "int32": "S32",
+    "s32": "S32",
+    "uint": "U32",
+    "system.uint32": "U32",
+    "uint32": "U32",
+    "u32": "U32",
+    "long": "S64",
+    "system.int64": "S64",
+    "int64": "S64",
+    "s64": "S64",
+    "ulong": "U64",
+    "system.uint64": "U64",
+    "uint64": "U64",
+    "u64": "U64",
+}
+
 
 class ParseError(RuntimeError):
     """Signal expected binary-format problems separately from programming errors.
@@ -50,6 +85,38 @@ def align(value: int, alignment: int) -> int:
         return value
     # Round up by adding alignment - 1, then clear the low bits with an alignment mask.
     return (value + (alignment - 1)) & ~(alignment - 1)
+
+
+def normalize_enum_storage_type(type_name: Any) -> str | None:
+    """Normalize an il2cpp enum underlying type name to an RSZ scalar storage code."""
+    if not isinstance(type_name, str):
+        return None
+    text = type_name.strip()
+    if not text:
+        return None
+    return ENUM_UNDERLYING_TYPE_MAP.get(text.lower())
+
+
+def enum_storage_type_from_size(size: int) -> str:
+    """Choose a conservative enum storage type from a schema-declared byte size."""
+    if size == 1:
+        return "U8"
+    if size == 2:
+        return "U16"
+    if size == 8:
+        return "S64"
+    return "S32"
+
+
+def enum_storage_size(storage_type: str) -> int:
+    """Return the byte width for a normalized enum storage type."""
+    if storage_type in {"S8", "U8"}:
+        return 1
+    if storage_type in {"S16", "U16"}:
+        return 2
+    if storage_type in {"S64", "U64"}:
+        return 8
+    return 4
 
 
 def format_guid_text_from_hex32(hex32: str) -> str:

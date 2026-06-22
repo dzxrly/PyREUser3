@@ -88,7 +88,9 @@ class User3Exporter(
         self.serializable_to_fixed: dict[str, str] = {}
         self.generic_container_rules: dict[str, tuple[str, str]] = {}
         self.param_type_default_enum: dict[str, str] = {}
+        self.enum_underlying_types: dict[str, str] = {}
         self.enum_member_to_types: dict[str, list[str]] = {}
+        self._pending_enum_context: dict | None = None
 
     def run(self) -> dict[str, int]:
         """Run the batch exporter and return conversion counters.
