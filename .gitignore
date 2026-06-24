@@ -67,8 +67,10 @@ logs/
 *.swp
 *.swo
 *~
-.codex
-.claude
+.codex/
+.claude/
+.agents/
+.codex*/
 
 # OS metadata
 .DS_Store
