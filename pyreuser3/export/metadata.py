@@ -337,7 +337,9 @@ class ExporterMetadataMixin:
         if typedb is None or not enum_lookup:
             return
 
-        for class_def in typedb.classes.values():
+        iter_classes = getattr(typedb, "iter_classes", None)
+        class_defs = iter_classes() if callable(iter_classes) else typedb.classes.values()
+        for class_def in class_defs:
             field_map = self.class_field_fixed_types.setdefault(class_def.name, {})
             for field in class_def.fields:
                 if field.field_type != "Enum":

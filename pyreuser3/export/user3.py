@@ -56,11 +56,12 @@ class ExporterUser3ParserMixin:
                 reader.seek(usr_header["userdata_info_tbl"])
                 for idx in range(usr_header["userdata_count"]):
                     class_hash = reader.read_u32()
-                    _crc = reader.read_u32()
+                    crc = reader.read_u32()
                     path_offset = reader.read_u64()
+                    class_def = self.typedb.get_class(class_hash, crc)
                     class_name = (
-                        self.typedb.get_class(class_hash).name
-                        if self.typedb.get_class(class_hash)
+                        class_def.name
+                        if class_def
                         else "Unknown Class"
                     )
                     header_userdata_infos.append(
@@ -112,7 +113,7 @@ class ExporterUser3ParserMixin:
             # depend on these indexes remaining stable.
             class_hash = reader.read_u32()
             crc = reader.read_u32()
-            class_def = self.typedb.get_class(class_hash)
+            class_def = self.typedb.get_class(class_hash, crc)
             instance_infos.append(
                 {
                     "index": idx,
@@ -175,7 +176,7 @@ class ExporterUser3ParserMixin:
                     }
                 )
                 continue
-            cls = self.typedb.get_class(class_hash)
+            cls = self.typedb.get_class(class_hash, int(info["crc"]))
             if cls is None:
                 # Follow schema field layout exactly so alignment, padding, and unknown
                 # data remain binary-compatible.
@@ -198,7 +199,14 @@ class ExporterUser3ParserMixin:
             start_pos = reader.tell()
             try:
                 parsed_instances.append(
-                    {"index": idx, "data": self._parse_instance(reader, class_hash)}
+                    {
+                        "index": idx,
+                        "data": self._parse_instance(
+                            reader,
+                            class_hash,
+                            crc=int(info["crc"]),
+                        ),
+                    }
                 )
             except Exception as exc:
                 # Treat each file independently so one malformed resource is reported

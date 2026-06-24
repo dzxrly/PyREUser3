@@ -74,7 +74,7 @@ class ExporterFieldParserMixin:
             return {"ref_instance_id": reader.read_s32()}
         if t in ("String", "Resource"):
             return read_len_utf16(reader)
-        if t == "C8":
+        if t in ("C8", "RuntimeType"):
             return read_len_c8(reader)
         if t in ("Guid", "GameObjectRef", "Uri"):
             return read_guid_like(reader)
@@ -230,7 +230,7 @@ class ExporterFieldParserMixin:
             t = field.field_type
             if field.is_array:
                 pos += 4
-            elif t in ("String", "Resource", "C8"):
+            elif t in ("String", "Resource", "C8", "RuntimeType"):
                 pos += 4
             elif t in ("Object", "UserData"):
                 pos += 4
@@ -250,7 +250,9 @@ class ExporterFieldParserMixin:
                 pos += max(field.size, 0)
         return max(pos, 1)
 
-    def _parse_instance(self, reader: BinaryReader, class_hash: int) -> dict[str, Any]:
+    def _parse_instance(
+        self, reader: BinaryReader, class_hash: int, crc: int | None = None
+    ) -> dict[str, Any]:
         """Parse instance.
 
         The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
@@ -259,6 +261,7 @@ class ExporterFieldParserMixin:
         Args:
             reader (BinaryReader): BinaryReader positioned at the value to parse.
             class_hash (int): RE_RSZ type hash for a class.
+            crc (int | None): Optional CRC used to choose among same-hash layout variants.
 
         Returns:
             dict[str, Any]: JSON-compatible dictionary for API or conversion callers.
@@ -266,7 +269,7 @@ class ExporterFieldParserMixin:
         Raises:
             ParseError: Binary data did not match the expected .user.3 or RSZ layout.
         """
-        cls = self.typedb.get_class(class_hash)
+        cls = self.typedb.get_class(class_hash, crc)
         if cls is None:
             raise ParseError(f"class hash 0x{class_hash:08x} not found in schema")
         out: dict[str, Any] = {"_class": cls.name, "fields": {}}

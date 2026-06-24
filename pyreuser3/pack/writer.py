@@ -215,8 +215,8 @@ class PackerWriterMixin:
             writer.write_struct("<I", len(raw) // 2)
             writer.write(raw)
             return
-        if t == "C8":
-            # C8 strings store UTF-8 byte length and keep a trailing null byte in the binary stream.
+        if t in {"C8", "RuntimeType"}:
+            # C8-style strings store UTF-8 byte length and keep a trailing null byte in the binary stream.
             writer.align(4)
             raw = f"{value or ''}\x00".encode("utf-8")
             writer.write_struct("<I", len(raw))
