@@ -1,0 +1,45 @@
+name: Update Powered by PyREUser3 cards
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+      timezone: "Asia/Shanghai"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: powered-by-pyreuser3-card
+  cancel-in-progress: false
+
+jobs:
+  update-card:
+    name: Regenerate branding SVGs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out branding branch
+        uses: actions/checkout@v4
+        with:
+          ref: branding
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Generate card
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYREUSER3_REPOSITORY: dzxrly/PyREUser3
+        run: python scripts/generate_powered_by_card.py --strict
+
+      - name: Commit updated card
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add powered-by-pyreuser3*.svg
+          if git diff --cached --quiet; then
+            echo "No SVG changes."
+          else
+            git commit -m "chore: update powered-by cards"
+            git push origin HEAD:branding
+          fi
