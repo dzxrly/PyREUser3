@@ -10,6 +10,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+BTABLE_ORDER_LIST_CLASS_HASH = 0xD081F6C1
+BTABLE_ORDER_LIST_NAME = "ace.btable.user_data.BTableOrderList"
+BTABLE_ORDER_LIST_LEGACY_CRC = 0x6C85037C
+BTABLE_ORDER_LIST_LEGACY_FIELDS = ("_OperatorFactories", "_CommandFactories")
+
 
 def murmur3_32(data: bytes, seed: int = 0xFFFFFFFF) -> int:
     """Compute the MurmurHash3 variant used by RE_RSZ type names.
@@ -101,7 +106,7 @@ class ClassDef:
 
 
 class TypeDB:
-    """Index RE_RSZ class definitions by hash and by name for parser and packer lookups.
+    """Index RE_RSZ class definitions by hash, CRC, and name for parser and packer lookups.
     """
 
     def __init__(self, classes: dict[int, ClassDef]):
@@ -114,6 +119,11 @@ class TypeDB:
             None. The method performs its documented side effect in place and raises on invalid input.
         """
         self.classes = classes
+        self.class_variants: dict[tuple[int, int], ClassDef] = {
+            (class_hash, class_def.crc & 0xFFFFFFFF): class_def
+            for class_hash, class_def in classes.items()
+        }
+        self._add_builtin_class_variants()
         # Preserve the exported JSON structure so external scripts and hand-edited files
         # remain compatible across workflows.
         self.name_to_hash = {c.name: h for h, c in classes.items()}
@@ -164,16 +174,98 @@ class TypeDB:
             )
         return cls(classes)
 
-    def get_class(self, class_hash: int) -> ClassDef | None:
+    def _add_builtin_class_variants(self) -> None:
+        """Register known CRC-specific layouts omitted by some public schema dumps."""
+        base_class = self.classes.get(BTABLE_ORDER_LIST_CLASS_HASH)
+        if base_class is None or base_class.name != BTABLE_ORDER_LIST_NAME:
+            return
+
+        fields_by_name = {field.name: field for field in base_class.fields}
+        legacy_fields = [
+            fields_by_name[name]
+            for name in BTABLE_ORDER_LIST_LEGACY_FIELDS
+            if name in fields_by_name
+        ]
+        if len(legacy_fields) != len(BTABLE_ORDER_LIST_LEGACY_FIELDS):
+            return
+
+        self.class_variants.setdefault(
+            (BTABLE_ORDER_LIST_CLASS_HASH, BTABLE_ORDER_LIST_LEGACY_CRC),
+            ClassDef(
+                name=base_class.name,
+                crc=BTABLE_ORDER_LIST_LEGACY_CRC,
+                fields=legacy_fields,
+            ),
+        )
+
+    def get_class(self, class_hash: int, crc: int | None = None) -> ClassDef | None:
         """Get class.
 
         Args:
             class_hash (int): RE_RSZ type hash for a class.
+            crc (int | None): Optional CRC used to choose among same-hash layout variants.
 
         Returns:
             ClassDef | None: Matching class definition when the schema contains the requested identifier.
         """
+        if crc is not None:
+            class_def = self.class_variants.get((class_hash, crc & 0xFFFFFFFF))
+            if class_def is not None:
+                return class_def
         return self.classes.get(class_hash)
+
+    def get_class_for_fields(
+        self,
+        class_name: str,
+        field_names: set[str] | None = None,
+        crc: int | None = None,
+    ) -> tuple[int, ClassDef] | None:
+        """Resolve a class by name, optionally preferring a CRC or exact field layout."""
+        class_hash = self.name_to_hash.get(class_name)
+        if class_hash is None:
+            return None
+        if crc is not None:
+            class_def = self.class_variants.get((class_hash, crc & 0xFFFFFFFF))
+            if class_def is not None:
+                return class_hash, class_def
+        if field_names is not None:
+            exact_matches: list[ClassDef] = []
+            for (variant_hash, _variant_crc), class_def in self.class_variants.items():
+                if variant_hash != class_hash or class_def.name != class_name:
+                    continue
+                variant_fields = {field.name or "unnamed" for field in class_def.fields}
+                if variant_fields == field_names:
+                    exact_matches.append(class_def)
+            if len(exact_matches) == 1:
+                class_def = exact_matches[0]
+                if crc is not None and (class_def.crc & 0xFFFFFFFF) != (
+                    crc & 0xFFFFFFFF
+                ):
+                    return (
+                        class_hash,
+                        ClassDef(
+                            name=class_def.name,
+                            crc=crc & 0xFFFFFFFF,
+                            fields=class_def.fields,
+                        ),
+                    )
+                return class_hash, class_def
+        class_def = self.get_class(class_hash)
+        if class_def is None:
+            return None
+        return class_hash, class_def
+
+    def iter_classes(self) -> list[ClassDef]:
+        """Return base classes and CRC-specific variants without duplicate objects."""
+        out: list[ClassDef] = []
+        seen: set[int] = set()
+        for class_def in list(self.classes.values()) + list(self.class_variants.values()):
+            marker = id(class_def)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            out.append(class_def)
+        return out
 
     def resolve_struct_hash(self, original_type: str) -> int | None:
         """Resolve struct hash.

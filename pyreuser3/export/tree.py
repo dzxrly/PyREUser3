@@ -245,6 +245,17 @@ class ExporterTreeMixin:
                 }
             }
 
+        if inst.get("unparsed"):
+            class_name = inst.get("class_name", "Unknown Class")
+            class_name = self._normalize_to_fixed_enum_type(class_name)
+            return {
+                class_name: {
+                    "ref_instance_id": idx,
+                    "unparsed": True,
+                    "reason": inst.get("reason", "unparsed"),
+                }
+            }
+
         data = inst.get("data", {})
         class_name = data.get("_class", inst.get("class_name", "Unknown Class"))
         class_name = self._normalize_to_fixed_enum_type(class_name)

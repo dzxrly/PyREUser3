@@ -95,16 +95,23 @@ class PackerPlanMixin:
             class_name = entry.get("_class")
             if not isinstance(class_name, str) or not class_name:
                 raise PackError(f"instance {idx} is missing _class")
-            class_hash = self.typedb.name_to_hash.get(class_name)
-            if class_hash is None:
+            declared_crc = self._parse_optional_u32(entry.get("_crc"))
+            fields = entry.get("fields", {})
+            field_names = (
+                {key for key in fields if isinstance(key, str)}
+                if isinstance(fields, dict)
+                else None
+            )
+            resolved = self.typedb.get_class_for_fields(
+                class_name,
+                field_names=field_names,
+                crc=declared_crc,
+            )
+            if resolved is None:
                 raise PackError(
                     f"class not found in schema for instance {idx}: {class_name}"
                 )
-            class_def = self.typedb.get_class(class_hash)
-            if class_def is None:
-                raise PackError(
-                    f"class hash not found in schema for instance {idx}: {class_name}"
-                )
+            class_hash, class_def = resolved
             self._validate_declared_hash(idx, entry, class_hash, class_def.crc)
             self.instances[idx] = InstanceSpec(
                 class_hash=class_hash, class_def=class_def
@@ -363,12 +370,15 @@ class PackerPlanMixin:
             PackError: JSON input could not be represented safely as .user.3 binary data.
         """
         class_name, fields = self._unwrap_node(node, expected_class)
-        class_hash = self.typedb.name_to_hash.get(class_name)
-        if class_hash is None:
+        field_names = (
+            {key for key in fields if isinstance(key, str)}
+            if isinstance(fields, dict)
+            else None
+        )
+        resolved = self.typedb.get_class_for_fields(class_name, field_names=field_names)
+        if resolved is None:
             raise PackError(f"class not found in schema: {class_name}")
-        class_def = self.typedb.get_class(class_hash)
-        if class_def is None:
-            raise PackError(f"class hash not found in schema: {class_name}")
+        class_hash, class_def = resolved
 
         spec = InstanceSpec(class_hash=class_hash, class_def=class_def)
         spec.fields = self._prepare_fields(class_def, fields)
@@ -602,7 +612,7 @@ class PackerPlanMixin:
             return False
         if field_def.field_type in {"F32", "F64"}:
             return 0.0
-        if field_def.field_type in {"String", "Resource", "C8"}:
+        if field_def.field_type in {"String", "Resource", "C8", "RuntimeType"}:
             return ""
         if field_def.field_type in {"Guid", "GameObjectRef", "Uri"}:
             return "00000000-0000-0000-0000-000000000000"
