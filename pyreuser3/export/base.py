@@ -87,8 +87,11 @@ class User3Exporter(
         self.class_field_fixed_types: dict[str, dict[str, str]] = {}
         self.serializable_to_fixed: dict[str, str] = {}
         self.generic_container_rules: dict[str, tuple[str, str]] = {}
+        self.generic_scalar_rules: dict[str, str] = {}
+        self.bitset_rules: dict[str, str] = {}
         self.param_type_default_enum: dict[str, str] = {}
         self.enum_underlying_types: dict[str, str] = {}
+        self.enum_flags: set[str] = set()
         self.enum_member_to_types: dict[str, list[str]] = {}
         self._pending_enum_context: dict | None = None
 

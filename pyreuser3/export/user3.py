@@ -407,12 +407,13 @@ class ExporterUser3ParserMixin:
                 entry["fields"] = self._postprocess_enum_nodes(
                     fields,
                     current_class=class_name if isinstance(class_name, str) else None,
+                    output_mode="repack",
                 )
             instances[str(idx)] = entry
 
         return {
             "_format": PACK_JSON_FORMAT,
-            "_version": 1,
+            "_version": 2,
             "_source": {
                 "file": str(document["user3_path"]),
                 "user_magic": self._format_hex_u32(self.user_magic),

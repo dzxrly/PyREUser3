@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import PACK_JSON_FORMAT, InstanceRef, InstanceSpec, PackError, StructValue
+from .models import InstanceRef, InstanceSpec, PackError, StructValue
+from ..core import PACK_JSON_FORMATS
+from ..enum_codec import bitset_enum_type, encode_bitset, encode_flags
 from ..schema import ClassDef, FieldDef
 
 
@@ -30,7 +32,7 @@ class PackerPlanMixin:
         """
         return (
             isinstance(data, dict)
-            and data.get("_format") == PACK_JSON_FORMAT
+            and data.get("_format") in PACK_JSON_FORMATS
             and isinstance(data.get("_instances"), dict)
         )
 
@@ -102,6 +104,8 @@ class PackerPlanMixin:
                 if isinstance(fields, dict)
                 else None
             )
+            if self._bitset_enum_for_class_name(class_name) is not None:
+                field_names = None
             resolved = self.typedb.get_class_for_fields(
                 class_name,
                 field_names=field_names,
@@ -127,6 +131,7 @@ class PackerPlanMixin:
             fields = entry.get("fields", {})
             if not isinstance(fields, dict):
                 raise PackError(f"instance {idx} fields must be an object")
+            fields = self._normalize_bitset_fields(spec.class_def, fields)
             self._validate_known_fields(idx, spec.class_def, fields)
             before_count = len(self.instances)
             spec.fields = self._prepare_fields(spec.class_def, fields)
@@ -375,10 +380,13 @@ class PackerPlanMixin:
             if isinstance(fields, dict)
             else None
         )
+        if self._bitset_enum_for_class_name(class_name) is not None:
+            field_names = None
         resolved = self.typedb.get_class_for_fields(class_name, field_names=field_names)
         if resolved is None:
             raise PackError(f"class not found in schema: {class_name}")
         class_hash, class_def = resolved
+        fields = self._normalize_bitset_fields(class_def, fields)
 
         spec = InstanceSpec(class_hash=class_hash, class_def=class_def)
         spec.fields = self._prepare_fields(class_def, fields)
@@ -435,6 +443,8 @@ class PackerPlanMixin:
         Raises:
             PackError: JSON input could not be represented safely as .user.3 binary data.
         """
+        if isinstance(raw_fields, dict):
+            raw_fields = self._normalize_bitset_fields(class_def, raw_fields)
         if not isinstance(raw_fields, dict):
             value_fields = [
                 f for f in class_def.fields if f.name in {"_Value", "value__"}
@@ -447,11 +457,25 @@ class PackerPlanMixin:
                 raise PackError(f"class {class_def.name} expects object fields")
 
         prepared: dict[str, Any] = {}
+        class_default_enum = getattr(self, "class_default_enums", {}).get(
+            class_def.name
+        )
         for field_def in class_def.fields:
             key = field_def.name or "unnamed"
             # Follow schema field layout exactly so alignment, padding, and unknown data
             # remain binary-compatible.
             raw_value = raw_fields.get(key, self._default_value(field_def))
+            if (
+                class_default_enum in getattr(self, "enum_flags", set())
+                and isinstance(raw_value, list)
+                and key.strip("_").lower() in {"value", "enumvalue", "fixedid"}
+            ):
+                try:
+                    raw_value = encode_flags(
+                        raw_value, class_default_enum, self.member_lookup
+                    )
+                except ValueError as exc:
+                    raise PackError(str(exc)) from exc
             prepared[key] = self._prepare_field_value(field_def, raw_value)
         return prepared
 
@@ -468,6 +492,18 @@ class PackerPlanMixin:
         Returns:
             Any: Normalized value ready for the next parse, export, post-processing, or pack step.
         """
+        enum_type = self._enum_type_for_field(field_def)
+        if (
+            not field_def.is_array
+            and isinstance(raw_value, list)
+            and enum_type is not None
+            and enum_type in getattr(self, "enum_flags", set())
+        ):
+            try:
+                return encode_flags(raw_value, enum_type, self.member_lookup)
+            except ValueError as exc:
+                raise PackError(str(exc)) from exc
+
         if field_def.is_array:
             items = raw_value if isinstance(raw_value, list) else []
             non_array = FieldDef(
@@ -489,6 +525,63 @@ class PackerPlanMixin:
             # remain binary-compatible.
             return self._prepare_struct_value(field_def, raw_value)
         return raw_value
+
+    def _enum_type_for_field(self, field_def: FieldDef) -> str | None:
+        original = field_def.original_type
+        if not isinstance(original, str):
+            return None
+        candidates = [original]
+        if original.endswith("_Serializable"):
+            candidates.append(f"{original[:-13]}_Fixed")
+        if "Serializable" in original:
+            candidates.append(original.replace("Serializable", "Fixed"))
+        for candidate in candidates:
+            if candidate in getattr(self, "enum_lookup", {}):
+                return candidate
+        return None
+
+    def _bitset_enum_for_class_name(self, class_name: str) -> str | None:
+        configured = getattr(self, "bitset_rules", {}).get(class_name)
+        candidate = configured or bitset_enum_type(class_name)
+        if candidate in getattr(self, "enum_lookup", {}):
+            return candidate
+        return None
+
+    def _normalize_bitset_fields(
+        self, class_def: ClassDef, raw_fields: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Translate readable/v2 Bitset virtual fields to the schema's raw word array."""
+        enum_type = self._bitset_enum_for_class_name(class_def.name)
+        if enum_type is None:
+            return raw_fields
+        out = dict(raw_fields)
+        readable_labels = out.pop(enum_type, None)
+        word_count = out.pop("_WordCount", None)
+        max_element = out.get("_MaxElement")
+        raw_value = out.get("_Value")
+        labels = readable_labels
+        if labels is None and isinstance(raw_value, list):
+            if word_count is not None or any(not isinstance(item, int) for item in raw_value):
+                labels = raw_value
+        if labels is None:
+            return out
+        if not isinstance(labels, list):
+            raise PackError(f"{class_def.name} readable bitset value must be an array")
+        if max_element is not None and not isinstance(max_element, int):
+            raise PackError(f"{class_def.name} _MaxElement must be an integer")
+        if word_count is not None and (not isinstance(word_count, int) or word_count < 0):
+            raise PackError(f"{class_def.name} _WordCount must be a non-negative integer")
+        try:
+            out["_Value"] = encode_bitset(
+                labels,
+                enum_type,
+                self.member_lookup,
+                max_element=max_element,
+                word_count=word_count,
+            )
+        except ValueError as exc:
+            raise PackError(str(exc)) from exc
+        return out
 
     def _prepare_object_ref(self, field_def: FieldDef, raw_value: Any) -> InstanceRef:
         """Prepare object ref.

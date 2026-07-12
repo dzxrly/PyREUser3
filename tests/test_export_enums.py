@@ -22,7 +22,11 @@ class EnumPostprocessor(ExporterPostprocessMixin):
         }
         self.serializable_to_fixed = {}
         self.generic_container_rules = {}
+        self.generic_scalar_rules = {}
+        self.bitset_rules = {}
         self.param_type_default_enum = {}
+        self.enum_underlying_types = {"via.ColorRampInterpolation": "S32"}
+        self.enum_flags = set()
 
     @staticmethod
     def _to_s32(value: int) -> int:
@@ -145,6 +149,48 @@ class ExporterEnumSourceMixinTests(unittest.TestCase):
                 "app.Container`2<app.Param,app.Mode_Fixed>": {
                     "param_type": "app.Param",
                     "enum_type": "app.Mode_Fixed",
+                }
+            },
+        )
+
+    def test_generic_context_supports_ordinary_enum_wrappers(self):
+        dump = {
+            "app.Mode": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.UInt32"},
+                    "A": {"default": 0},
+                    "B": {"default": 1},
+                },
+            },
+            "app.Param": {"parent": "System.Object"},
+            "ace.Bitset`1<app.Mode>": {
+                "generic_arg_types": [{"type": "app.Mode"}],
+            },
+            "ace.btable.cEditFieldEnum`1<app.Mode>": {
+                "generic_arg_types": [{"type": "app.Mode"}],
+            },
+            "app.cEnumerableParam`2<app.Mode,app.Param>": {
+                "generic_arg_types": [
+                    {"type": "app.Mode"},
+                    {"type": "app.Param"},
+                ],
+            },
+        }
+
+        context = ExporterEnumSourceMixin.export_enum_context_internal(dump)
+
+        self.assertEqual(context["bitset_rules"], {"ace.Bitset`1<app.Mode>": "app.Mode"})
+        self.assertEqual(
+            context["generic_scalar_rules"],
+            {"ace.btable.cEditFieldEnum`1<app.Mode>": "app.Mode"},
+        )
+        self.assertEqual(
+            context["generic_container_rules"],
+            {
+                "app.cEnumerableParam`2<app.Mode,app.Param>": {
+                    "param_type": "app.Param",
+                    "enum_type": "app.Mode",
                 }
             },
         )
