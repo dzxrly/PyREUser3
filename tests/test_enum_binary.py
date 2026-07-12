@@ -95,6 +95,22 @@ class EnumBinaryTests(unittest.TestCase):
         writer_mixin._write_scalar(writer, field, "Right")
         self.assertEqual(bytes(writer.data), b"\x02")
 
+    def test_erased_generic_enum_field_accepts_numeric_label(self):
+        writer_mixin = EnumFieldWriter()
+        writer = BinaryWriter()
+        field = FieldDef(
+            name="_Value",
+            field_type="S32",
+            original_type="System.Int32",
+            size=4,
+            align=4,
+            is_array=False,
+        )
+
+        writer_mixin._write_scalar(writer, field, "[2] Right")
+
+        self.assertEqual(bytes(writer.data), b"\x02\x00\x00\x00")
+
     def test_runtime_type_reader_uses_c8_string_layout(self):
         parser = EnumFieldParser()
         reader = BinaryReader(b"\x04\x00\x00\x00abc\x00tail")

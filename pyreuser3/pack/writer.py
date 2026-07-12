@@ -6,18 +6,13 @@ strings, arrays, structs, enum values, and raw byte preservation.
 
 from __future__ import annotations
 
-import re
 import uuid
 from typing import Any
 
 from .models import BinaryWriter, InstanceRef, InstanceSpec, PackError, StructValue
 from ..core import align, enum_storage_type_from_size
+from ..enum_codec import ENUM_LABEL_RE
 from ..schema import FieldDef
-
-# Register enum values through the shared lookup tables so readable labels and numeric
-# packing stay reversible.
-ENUM_LABEL_RE = re.compile(r"^\[(-?\d+)\]\s*(.*)$")
-
 
 class PackerWriterMixin:
     """Serialize planned instances, tables, headers, and field values into the binary .user.3

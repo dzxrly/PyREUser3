@@ -15,6 +15,7 @@ from .models import InstanceSpec
 from .plan import PackerPlanMixin
 from .writer import PackerWriterMixin
 from ..core import RSZ_MAGIC, USR_MAGIC, resolve_schema_path
+from ..enum_codec import is_probable_flags_enum
 from ..export import User3Exporter
 from ..rich_ui import BatchProgress
 from ..schema import TypeDB
@@ -65,8 +66,17 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
         self.enum_underlying_types: dict[str, str] = {}
+        self.bitset_rules: dict[str, str] = {}
+        self.class_default_enums: dict[str, str] = {}
         self.enum_lookup = self._load_enum_lookup()
         self.member_lookup = self._build_member_lookup()
+        self.enum_flags = {
+            enum_type
+            for enum_type, value_map in self.enum_lookup.items()
+            if is_probable_flags_enum(
+                enum_type, value_map, self.enum_underlying_types.get(enum_type)
+            )
+        }
         self.instances: list[InstanceSpec | None] = []
 
     def pack_json_file(self, json_path: str | Path, output_path: str | Path) -> Path:
@@ -253,6 +263,31 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
                 for enum_name, storage_type in enum_underlying_types.items():
                     if isinstance(enum_name, str) and isinstance(storage_type, str):
                         self.enum_underlying_types[enum_name] = storage_type
+            bitset_rules = enum_context.get("bitset_rules")
+            if isinstance(bitset_rules, dict):
+                self.bitset_rules = {
+                    class_name: enum_type
+                    for class_name, enum_type in bitset_rules.items()
+                    if isinstance(class_name, str) and isinstance(enum_type, str)
+                }
+            generic_scalar_rules = enum_context.get("generic_scalar_rules")
+            if isinstance(generic_scalar_rules, dict):
+                for class_name, enum_type in generic_scalar_rules.items():
+                    if isinstance(class_name, str) and isinstance(enum_type, str):
+                        self.class_default_enums[class_name] = enum_type
+            generic_container_rules = enum_context.get("generic_container_rules")
+            param_enums: dict[str, set[str]] = {}
+            if isinstance(generic_container_rules, dict):
+                for rule in generic_container_rules.values():
+                    if not isinstance(rule, dict):
+                        continue
+                    param_type = rule.get("param_type")
+                    enum_type = rule.get("enum_type")
+                    if isinstance(param_type, str) and isinstance(enum_type, str):
+                        param_enums.setdefault(param_type, set()).add(enum_type)
+            for param_type, enum_types in param_enums.items():
+                if len(enum_types) == 1:
+                    self.class_default_enums[param_type] = next(iter(enum_types))
         if not isinstance(raw, dict):
             return {}
 
@@ -268,8 +303,6 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
                 # Preserve the exported JSON structure so external scripts and hand-
                 # edited files remain compatible across workflows.
                 value_map[raw_value] = entry
-                value_map[self._to_s32(raw_value)] = entry
-                value_map[self._to_u32(raw_value)] = entry
             if value_map:
                 lookup[enum_type] = value_map
         return lookup

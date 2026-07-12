@@ -8,6 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..enum_codec import (
+    bitset_enum_type,
+    decode_bitset,
+    decode_flags,
+    enum_member_for_value,
+)
+
 
 class ExporterPostprocessMixin:
     """Clean parsed JSON trees by normalizing enum labels, class names, indexes, wrappers, and
@@ -80,11 +87,19 @@ class ExporterPostprocessMixin:
         if value_map is None:
             return value
         # Leave numeric enum values unchanged when no enum lookup is available for the current context.
-        matched = value_map.get(value)
-        if matched is None:
-            matched = value_map.get(self._to_s32(value))
-        if matched is None:
-            matched = value_map.get(self._to_u32(value))
+        if fixed_enum_type in getattr(self, "enum_flags", set()):
+            return decode_flags(
+                self.enum_lookup,
+                fixed_enum_type,
+                value,
+                getattr(self, "enum_underlying_types", {}),
+            )
+        matched = enum_member_for_value(
+            self.enum_lookup,
+            fixed_enum_type,
+            value,
+            getattr(self, "enum_underlying_types", {}),
+        )
         if matched is None:
             return value
         member_name, fixed_value = matched
@@ -183,7 +198,43 @@ class ExporterPostprocessMixin:
         if not field_name:
             return False
         key = field_name.strip("_").lower()
-        return key in {"value", "enumvalue", "fixedid"} or key.endswith("id")
+        return key in {"value", "enumvalue", "fixedid"}
+
+    def _bitset_enum_for_class(self, class_name: str | None) -> str | None:
+        if not isinstance(class_name, str):
+            return None
+        configured = getattr(self, "bitset_rules", {}).get(class_name)
+        candidate = configured or bitset_enum_type(class_name)
+        return candidate if candidate in self.enum_lookup else None
+
+    def _postprocess_bitset_fields(
+        self, fields: dict[str, Any], enum_type: str, output_mode: str
+    ) -> dict[str, Any]:
+        """Convert one Bitset word array while retaining its exact capacity."""
+        raw_value = fields.get("_Value", [])
+        max_element = fields.get("_MaxElement")
+        words = raw_value if isinstance(raw_value, list) else []
+        if words and all(isinstance(item, int) for item in words):
+            labels = decode_bitset(
+                words,
+                enum_type,
+                self.enum_lookup,
+                max_element if isinstance(max_element, int) else None,
+                getattr(self, "enum_underlying_types", {}),
+            )
+        else:
+            labels = list(words)
+        word_count = len(words)
+        if output_mode == "repack":
+            out = dict(fields)
+            out["_Value"] = labels
+            out["_WordCount"] = word_count
+            return out
+        return {
+            enum_type: labels,
+            "_MaxElement": max_element,
+            "_WordCount": word_count,
+        }
 
     def _postprocess_enum_nodes(
         self,
@@ -193,6 +244,7 @@ class ExporterPostprocessMixin:
         class_default_enum: str | None = None,
         container_param_rule: tuple[str, str] | None = None,
         field_name: str | None = None,
+        output_mode: str = "readable",
     ) -> Any:
         """Walk an exported JSON tree and replace numeric enum fields with readable labels.
 
@@ -214,6 +266,31 @@ class ExporterPostprocessMixin:
             Any: Normalized value ready for the next parse, export, post-processing, or pack step.
         """
         if isinstance(value, dict):
+            direct_bitset_enum = self._bitset_enum_for_class(current_class)
+            if direct_bitset_enum is not None and "_Value" in value:
+                return self._postprocess_bitset_fields(
+                    value, direct_bitset_enum, output_mode
+                )
+            if len(value) == 1:
+                only_key = next(iter(value))
+                wrapped_bitset_enum = (
+                    self._bitset_enum_for_class(only_key)
+                    if isinstance(only_key, str)
+                    else None
+                )
+                wrapped_fields = value[only_key]
+                if wrapped_bitset_enum is not None and isinstance(wrapped_fields, dict):
+                    converted = self._postprocess_bitset_fields(
+                        wrapped_fields, wrapped_bitset_enum, output_mode
+                    )
+                    if output_mode == "repack":
+                        return {only_key: converted}
+                    return converted
+
+            if class_default_enum is None and isinstance(current_class, str):
+                class_default_enum = getattr(self, "generic_scalar_rules", {}).get(
+                    current_class
+                )
             out: dict[str, Any] = {}
             dict_level_enum_hint: str | None = None
             enum_name = value.get("_EnumName")
@@ -228,7 +305,6 @@ class ExporterPostprocessMixin:
                 if (
                     isinstance(k, str)
                     and self._looks_like_class_name(k)
-                    and isinstance(v, dict)
                 ):
                     # Preserve the exported JSON structure so external scripts and hand-
                     # edited files remain compatible across workflows.
@@ -243,6 +319,15 @@ class ExporterPostprocessMixin:
                         if normalized_class in self.enum_lookup
                         else None
                     )
+                    scalar_rule = getattr(self, "generic_scalar_rules", {}).get(k)
+                    if scalar_rule is None:
+                        scalar_rule = getattr(self, "generic_scalar_rules", {}).get(
+                            normalized_class
+                        )
+                    if scalar_rule is not None:
+                        next_scalar_hint = scalar_rule
+                        if output_mode == "readable":
+                            key_out = scalar_rule
                     next_container_rule = self.generic_container_rules.get(k)
                     if next_container_rule is None:
                         next_container_rule = self.generic_container_rules.get(
@@ -251,6 +336,8 @@ class ExporterPostprocessMixin:
                     next_default_enum = self._resolve_class_default_enum(
                         normalized_class
                     )
+                    if scalar_rule is not None:
+                        next_default_enum = scalar_rule
                     if (
                         container_param_rule is not None
                         and normalized_class == container_param_rule[0]
@@ -266,6 +353,7 @@ class ExporterPostprocessMixin:
                         class_default_enum=next_default_enum,
                         container_param_rule=next_container_rule,
                         field_name=None,
+                        output_mode=output_mode,
                     )
                     continue
 
@@ -315,6 +403,7 @@ class ExporterPostprocessMixin:
                     class_default_enum=class_default_enum,
                     container_param_rule=container_param_rule,
                     field_name=k if isinstance(k, str) else None,
+                    output_mode=output_mode,
                 )
             return out
 
@@ -329,6 +418,7 @@ class ExporterPostprocessMixin:
                     class_default_enum=class_default_enum,
                     container_param_rule=container_param_rule,
                     field_name=field_name,
+                    output_mode=output_mode,
                 )
                 for item in value
             ]

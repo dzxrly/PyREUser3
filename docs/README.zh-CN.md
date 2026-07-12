@@ -140,6 +140,11 @@ repack_data = converter.user3_to_json(
 
 使用 `json_format="readable"` 时返回与 `export_file()` 一致的可读导出结构；使用 `json_format="repack"` 时返回可传给 `pack()` 的完整实例表结构。
 
+枚举字段会按照真实底层存储宽度输出为 `[数值] 名称`。标量位标志枚举输出为标签数组；
+``ace.Bitset`1<T>`` 输出为枚举索引标签，并保留 `_MaxElement` 与 `_WordCount`，因此未知位和
+填充词也可以无损封回。新的 repack 文档格式为 `re_user3_pack_v2`，封回器仍兼容使用原始
+数值词数组的 v1 文档。
+
 批量处理目录：
 
 ```python

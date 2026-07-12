@@ -258,6 +258,9 @@ class ExporterEnumSourceMixin:
             "class_field_fixed_types": {},
             "serializable_to_fixed": {},
             "generic_container_rules": {},
+            "generic_scalar_rules": {},
+            "bitset_rules": {},
+            "generic_candidates": {},
             "enum_underlying_types": {},
             "enum_types": set(),
             "serializable_fallback_candidates": [],
@@ -271,7 +274,7 @@ class ExporterEnumSourceMixin:
         if not isinstance(class_name, str) or not isinstance(obj, dict):
             return
 
-        if class_name.endswith("_Fixed") and obj.get("parent") == "System.Enum":
+        if obj.get("parent") == "System.Enum":
             state["enum_types"].add(class_name)
         if obj.get("parent") == "System.Enum":
             storage_type = cls._extract_enum_underlying_type(obj)
@@ -383,25 +386,18 @@ class ExporterEnumSourceMixin:
                 state["serializable_fallback_candidates"].append(class_name)
 
         generic_args = obj.get("generic_arg_types")
-        if isinstance(generic_args, list) and len(generic_args) >= 2:
-            enum_types_in_args: list[str] = []
-            param_types: list[str] = []
-            for arg in generic_args:
-                if not isinstance(arg, dict):
-                    continue
-                raw_type = arg.get("type")
-                fixed_type = cls._extract_fixed_enum_type(raw_type)
-                if fixed_type is not None:
-                    enum_types_in_args.append(fixed_type)
-                elif isinstance(raw_type, str) and raw_type != "unknown":
-                    param_types.append(raw_type)
-            enum_types_unique = list(dict.fromkeys(enum_types_in_args))
-            param_types_unique = list(dict.fromkeys(param_types))
-            if len(enum_types_unique) == 1 and len(param_types_unique) == 1:
-                state["generic_container_rules"][class_name] = {
-                    "param_type": param_types_unique[0],
-                    "enum_type": enum_types_unique[0],
-                }
+        if isinstance(generic_args, list):
+            raw_types = [
+                arg.get("type")
+                for arg in generic_args
+                if isinstance(arg, dict)
+                and isinstance(arg.get("type"), str)
+                and arg.get("type") != "unknown"
+            ]
+            if raw_types:
+                # Resolution is deferred until every top-level enum entry has been
+                # observed; il2cpp dump ordering is not a semantic contract.
+                state["generic_candidates"][class_name] = raw_types
 
     @classmethod
     def _finalize_enum_context_state(cls, state: dict[str, Any]) -> dict:
@@ -415,10 +411,30 @@ class ExporterEnumSourceMixin:
             if len(fallback_types) == 1:
                 serializable_to_fixed[class_name] = fallback_types[0]
 
+        for class_name, raw_types in state["generic_candidates"].items():
+            enum_args = list(dict.fromkeys(t for t in raw_types if t in enum_types))
+            param_args = list(dict.fromkeys(t for t in raw_types if t not in enum_types))
+            if len(enum_args) != 1:
+                continue
+            enum_type = enum_args[0]
+            if class_name.startswith("ace.Bitset`1<"):
+                state["bitset_rules"][class_name] = enum_type
+            elif class_name.startswith("ace.btable.cEditFieldEnum`1<"):
+                state["generic_scalar_rules"][class_name] = enum_type
+            elif len(param_args) == 1 and (
+                enum_type.endswith("_Fixed") or "cEnumerableParam" in class_name
+            ):
+                state["generic_container_rules"][class_name] = {
+                    "param_type": param_args[0],
+                    "enum_type": enum_type,
+                }
+
         return {
             "class_field_fixed_types": state["class_field_fixed_types"],
             "serializable_to_fixed": serializable_to_fixed,
             "generic_container_rules": state["generic_container_rules"],
+            "generic_scalar_rules": state["generic_scalar_rules"],
+            "bitset_rules": state["bitset_rules"],
             "enum_underlying_types": state["enum_underlying_types"],
         }
 

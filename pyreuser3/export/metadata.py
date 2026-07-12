@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import ParseError, enum_storage_type_from_size
+from ..enum_codec import enum_member_for_value, is_probable_flags_enum
 from ..rich_ui import get_console
 
 
@@ -100,8 +101,6 @@ class ExporterMetadataMixin:
                 # Register enum values through the shared lookup tables so readable
                 # labels and numeric packing stay reversible.
                 value_map[raw_value] = entry
-                value_map[self._to_s32(raw_value)] = entry
-                value_map[self._to_u32(raw_value)] = entry
             if value_map:
                 lookup[enum_type] = value_map
         return lookup
@@ -205,11 +204,12 @@ class ExporterMetadataMixin:
             value_map = self.enum_lookup.get(enum_type)
             if value_map is None:
                 continue
-            if (
-                value in value_map
-                or self._to_s32(value) in value_map
-                or self._to_u32(value) in value_map
-            ):
+            if enum_member_for_value(
+                self.enum_lookup,
+                enum_type,
+                value,
+                self.enum_underlying_types,
+            ) is not None:
                 matched.append(enum_type)
         if len(matched) == 1:
             return matched[0]
@@ -232,8 +232,11 @@ class ExporterMetadataMixin:
         self.class_field_fixed_types = {}
         self.serializable_to_fixed = {}
         self.generic_container_rules = {}
+        self.generic_scalar_rules = {}
+        self.bitset_rules = {}
         self.param_type_default_enum = {}
         self.enum_underlying_types = {}
+        self.enum_flags = set()
 
         class_field_fixed_types = raw.get("class_field_fixed_types")
         if isinstance(class_field_fixed_types, dict):
@@ -268,7 +271,6 @@ class ExporterMetadataMixin:
                 if (
                     isinstance(serializable_name, str)
                     and isinstance(fixed_name, str)
-                    and fixed_name.endswith("_Fixed")
                 ):
                     self.serializable_to_fixed[serializable_name] = fixed_name
 
@@ -285,7 +287,6 @@ class ExporterMetadataMixin:
                 if (
                     isinstance(param_type, str)
                     and isinstance(enum_type, str)
-                    and enum_type.endswith("_Fixed")
                 ):
                     self.generic_container_rules[container_name] = (
                         param_type,
@@ -298,6 +299,32 @@ class ExporterMetadataMixin:
                 # Register enum values through the shared lookup tables so readable
                 # labels and numeric packing stay reversible.
                 self.param_type_default_enum[param_type] = next(iter(enum_types))
+
+        generic_scalar_rules = raw.get("generic_scalar_rules")
+        if isinstance(generic_scalar_rules, dict):
+            self.generic_scalar_rules = {
+                class_name: enum_type
+                for class_name, enum_type in generic_scalar_rules.items()
+                if isinstance(class_name, str)
+                and isinstance(enum_type, str)
+                and enum_type in self.enum_lookup
+            }
+        bitset_rules = raw.get("bitset_rules")
+        if isinstance(bitset_rules, dict):
+            self.bitset_rules = {
+                class_name: enum_type
+                for class_name, enum_type in bitset_rules.items()
+                if isinstance(class_name, str)
+                and isinstance(enum_type, str)
+                and enum_type in self.enum_lookup
+            }
+        self.enum_flags = {
+            enum_type
+            for enum_type, value_map in self.enum_lookup.items()
+            if is_probable_flags_enum(
+                enum_type, value_map, self.enum_underlying_types.get(enum_type)
+            )
+        }
 
     def _enum_type_candidates_for_lookup(self, type_name: str) -> list[str]:
         """Yield enum lookup candidates for schema or il2cpp type names."""
@@ -342,8 +369,6 @@ class ExporterMetadataMixin:
         for class_def in class_defs:
             field_map = self.class_field_fixed_types.setdefault(class_def.name, {})
             for field in class_def.fields:
-                if field.field_type != "Enum":
-                    continue
                 enum_type = self._resolve_enum_type_for_lookup(field.original_type)
                 if enum_type is not None:
                     field_map.setdefault(field.name or "unnamed", enum_type)

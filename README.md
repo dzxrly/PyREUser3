@@ -112,6 +112,13 @@ repack_data = converter.user3_to_json(
 
 Use `json_format="readable"` for the same shape produced by `export_file()`, or `json_format="repack"` for the full instance-table document accepted by `pack()`.
 
+Enum fields are rendered as `[numeric] Name` labels using the enum's actual storage
+width. Scalar flag enums are rendered as arrays of labels. ``ace.Bitset`1<T>`` values are
+rendered as enum-index labels together with `_MaxElement` and `_WordCount`, so unknown
+bits and padded word arrays remain reversible. Repack exports use
+`re_user3_pack_v2`; the packer continues to accept v1 documents with raw numeric Bitset
+word arrays.
+
 For stable patch-and-repack workflows, use `patch_file()` or `parse_pack_file()`:
 
 ```python
