@@ -35,6 +35,7 @@ class EmptyBinaryWriter(PackerWriterMixin):
         self.instances = [None]
         self.user_magic = USR_MAGIC
         self.rsz_magic = RSZ_MAGIC
+        self.rsz_version = 16
 
 
 class PlanDefaults(PackerPlanMixin):

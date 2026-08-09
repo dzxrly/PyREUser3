@@ -15,10 +15,16 @@ pip install pyreuser3
 - A reusable Python API through `REUser3Converter`.
 - CLI commands through `pyreuser3`.
 - A local `.user.3` export Web UI through `pyreuser3-web`.
+- Automatic separation of the USR outer layout from the embedded RSZ header family;
+  modern RSZ v4+ files preserve their original numeric version during repack.
 
 The published package intentionally does not include game resources, dumped game data, RE_RSZ templates,
 `il2cpp_dump.json`, or repository-specific helper scripts. You need to provide data files that match the target game and
 version.
+
+Verified H30/modern layouts support repacking. Experimental physical H28 and legacy
+RSZ v3 layouts are readable for analysis but intentionally blocked from repacking
+until real fixtures provide byte-for-byte validation.
 
 ## Requirements
 

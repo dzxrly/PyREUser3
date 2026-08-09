@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
-from importlib.metadata import PackageNotFoundError, version
 from typing import Sequence
 
+from . import __version__
 from .core import RSZ_MAGIC, USR_MAGIC
 
 
@@ -33,10 +33,7 @@ def package_version() -> str:
     Returns:
         str: Normalized or formatted text.
     """
-    try:
-        return version("PyREUser3")
-    except PackageNotFoundError:
-        return "0.1.0"
+    return __version__
 
 
 def normalize_tree_depth(value: str) -> int | str:
@@ -143,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to il2cpp_dump.json, used to generate enum labels.",
     )
+    export_parser.add_argument(
+        "--json-format",
+        choices=("readable", "repack"),
+        default="readable",
+        help="Export read-only readable JSON or packable repack JSON (default: readable).",
+    )
     add_magic_args(export_parser)
     export_parser.set_defaults(func=run_export)
 
@@ -154,7 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-json",
         "-j",
         required=True,
-        help="JSON file or root directory that contains .user.3.json files.",
+        help="Repack JSON file or root directory that contains repack documents.",
     )
     pack_parser.add_argument(
         "--schema-path",
@@ -212,6 +215,7 @@ def run_export(args: argparse.Namespace) -> int:
         il2cpp_dump_path=args.il2cpp_dump_path,
         user_magic=args.user_magic,
         rsz_magic=args.rsz_magic,
+        json_format=args.json_format,
     )
     result = exporter.run()
     console.log("Export complete:", json.dumps(result, ensure_ascii=False))
