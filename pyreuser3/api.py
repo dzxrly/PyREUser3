@@ -73,6 +73,7 @@ class REUser3Converter:
         user3_root: str | Path,
         output_root: str | Path,
         exclude_regexes: list[str] | None = None,
+        json_format: JsonFormat = "readable",
     ) -> dict[str, int]:
         """Export every selected .user.3 file under a directory or single-file root.
 
@@ -81,33 +82,42 @@ class REUser3Converter:
             output_root (str | Path): Directory where generated output is written.
             exclude_regexes (list[str] | None): Regular expressions used to skip matching
             relative paths.
+            json_format (JsonFormat): "readable" for read-only exports or "repack"
+            for documents accepted by pack().
 
         Returns:
             dict[str, int]: Counters describing total, successful, and failed items.
         """
-        exporter = self._new_exporter(user3_root, output_root, exclude_regexes)
+        exporter = self._new_exporter(
+            user3_root,
+            output_root,
+            exclude_regexes,
+            json_format=self._normalize_json_format(json_format),
+        )
         return exporter.run()
 
     def export_file(
         self,
         user3_path: str | Path,
         json_path: str | Path,
+        json_format: JsonFormat = "readable",
     ) -> Path:
         """Export one .user.3 file to the requested JSON path.
 
         Args:
             user3_path (str | Path): Path to the .user.3 file being parsed, exported, patched, or packed.
             json_path (str | Path): Path to the JSON document read from or written by this workflow.
+            json_format (JsonFormat): "readable" for a read-only tree or "repack"
+            for a document accepted by pack().
 
         Returns:
             Path: Concrete filesystem path returned after the read, write, or resolution step finishes.
         """
-        # Reuse parse_file so single-file and batch exports keep the same parsed JSON shape and metadata handling.
-        # Preserve the exported JSON structure so external scripts and hand-edited files
-        # remain compatible across workflows.
+        # Use the same in-memory format selector as parse_file/parse_pack_file so
+        # single-file and batch exports keep identical document shapes.
         tree = self.user3_to_json(
             user3_path,
-            json_format="readable",
+            json_format=json_format,
             round_floats=True,
         )
         target = Path(json_path)
@@ -343,6 +353,7 @@ class REUser3Converter:
         user3_root: str | Path,
         output_root: str | Path,
         exclude_regexes: list[str] | None,
+        json_format: str = "readable",
     ) -> User3Exporter:
         """Create an exporter with this facade's schema, enum metadata, and magic values.
 
@@ -351,6 +362,7 @@ class REUser3Converter:
             output_root (str | Path): Directory where generated output is written.
             exclude_regexes (list[str] | None): Regular expressions used to skip matching
             relative paths.
+            json_format (str): Export document shape requested by the caller.
 
         Returns:
             User3Exporter: Configured object or normalized value returned for the caller to use directly.
@@ -369,6 +381,7 @@ class REUser3Converter:
             il2cpp_dump_path=self.il2cpp_dump_path,
             user_magic=self.user_magic,
             rsz_magic=self.rsz_magic,
+            json_format=json_format,
         )
 
     def _new_packer(self, output_root: str | Path | None) -> User3Packer:

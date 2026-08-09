@@ -9,10 +9,23 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from .models import BinaryWriter, InstanceRef, InstanceSpec, PackError, StructValue
+from .models import (
+    BinaryWriter,
+    ExternalUserdataSpec,
+    InstanceRef,
+    InstanceSpec,
+    PackError,
+    StructValue,
+)
 from ..core import align, enum_storage_type_from_size
 from ..enum_codec import ENUM_LABEL_RE
 from ..schema import FieldDef
+from ..usr_layouts import (
+    DEFAULT_RSZ_HEADER_LAYOUT_ID,
+    DEFAULT_USR_LAYOUT_ID,
+    get_rsz_header_layout,
+    get_usr_layout,
+)
 
 class PackerWriterMixin:
     """Serialize planned instances, tables, headers, and field values into the binary .user.3
@@ -31,56 +44,259 @@ class PackerWriterMixin:
         Returns:
             bytes: Encoded binary data ready to write to disk.
         """
+        layout = getattr(self, "usr_layout", None)
+        if layout is None:
+            layout = get_usr_layout(DEFAULT_USR_LAYOUT_ID)
+        if layout is None:
+            raise PackError(f"default USR layout is not registered: {DEFAULT_USR_LAYOUT_ID}")
+        rsz_layout = getattr(self, "rsz_header_layout", None)
+        if rsz_layout is None:
+            rsz_layout = get_rsz_header_layout(DEFAULT_RSZ_HEADER_LAYOUT_ID)
+        if rsz_layout is None:
+            raise PackError(
+                "default RSZ header layout is not registered: "
+                f"{DEFAULT_RSZ_HEADER_LAYOUT_ID}"
+            )
+        if not layout.repack_supported:
+            raise PackError(f"USR layout {layout.identifier} is read-only")
+        if not rsz_layout.repack_supported:
+            raise PackError(f"RSZ header layout {rsz_layout.identifier} is read-only")
+        usr_resources = list(getattr(self, "usr_resources", []))
+        usr_userdata = list(getattr(self, "usr_userdata", []))
+        rsz_userdata = list(getattr(self, "rsz_userdata", []))
+        raw_rsz_version = getattr(self, "rsz_version", None)
+        if not isinstance(raw_rsz_version, int):
+            raise PackError("RSZ version must come from repack layout metadata")
+        rsz_version = raw_rsz_version
+        if not rsz_layout.supports_version(rsz_version):
+            raise PackError(
+                f"RSZ version {rsz_version} is not supported by header layout "
+                f"{rsz_layout.identifier}"
+            )
+        rsz_reserved = int(getattr(self, "rsz_reserved", 0))
+        header_padding = bytes(
+            getattr(
+                self,
+                "usr_header_padding",
+                b"\x00" * layout.header_padding_size,
+            )
+        )
+        if len(header_padding) != layout.header_padding_size:
+            raise PackError(
+                f"layout {layout.identifier} requires {layout.header_padding_size} "
+                f"header padding bytes, got {len(header_padding)}"
+            )
+
         data_writer = BinaryWriter()
         for spec in self.instances[1:]:
             if spec is None:
+                raise PackError("instance table contains an unexpected empty slot")
+            if isinstance(spec, ExternalUserdataSpec):
                 continue
             # Preserve instance numbering and reference identity; RSZ object links
             # depend on these indexes remaining stable.
             self._write_instance(data_writer, spec)
 
-        object_count = len(root_ids)
-        instance_count = len(self.instances)
-        # Preserve instance numbering and reference identity; RSZ object links depend on
-        # these indexes remaining stable.
-        instance_offset = 48 + object_count * 4
-        data_offset = align(instance_offset + instance_count * 8, 16)
+        writer = BinaryWriter()
+        writer.write(b"\x00" * layout.semantic_header_size)
+        writer.write(header_padding)
+        writer.pad_to(layout.header_size)
 
-        rsz_writer = BinaryWriter()
-        # Apply RE Engine alignment and offset rules before touching binary fields;
-        # later table offsets assume this layout.
-        rsz_writer.write_struct(
-            "<IIiiiiqqq",
-            self.rsz_magic,
-            16,
-            object_count,
-            instance_count,
-            0,
-            0,
-            instance_offset,
-            data_offset,
-            data_offset,
-        )
+        writer.align(layout.table_alignment)
+        resource_info_tbl = writer.tell()
+        resource_entry_offsets: list[int] = []
+        for _item in usr_resources:
+            resource_entry_offsets.append(writer.tell())
+            writer.write(b"\x00" * layout.resource_entry_size)
+
+        writer.align(layout.table_alignment)
+        userdata_info_tbl = writer.tell()
+        usr_userdata_entry_offsets: list[int] = []
+        for _item in usr_userdata:
+            usr_userdata_entry_offsets.append(writer.tell())
+            writer.write(b"\x00" * layout.userdata_entry_size)
+
+        resource_path_offsets: list[int] = []
+        for item in usr_resources:
+            resource_path_offsets.append(writer.tell())
+            self._write_usr_path(writer, item.path, layout.path_encoding)
+        usr_userdata_path_offsets: list[int] = []
+        for item in usr_userdata:
+            usr_userdata_path_offsets.append(writer.tell())
+            self._write_usr_path(writer, item.path, layout.path_encoding)
+
+        for entry_offset, item, path_offset in zip(
+            resource_entry_offsets, usr_resources, resource_path_offsets
+        ):
+            self._patch_named_struct(
+                writer,
+                entry_offset,
+                layout.resource_entry_struct,
+                layout.resource_entry_fields,
+                {"path_offset": path_offset, "reserved": item.reserved},
+            )
+        for entry_offset, item, path_offset in zip(
+            usr_userdata_entry_offsets, usr_userdata, usr_userdata_path_offsets
+        ):
+            self._patch_named_struct(
+                writer,
+                entry_offset,
+                layout.userdata_entry_struct,
+                layout.userdata_entry_fields,
+                {
+                    "class_hash": item.class_hash,
+                    "crc": item.crc,
+                    "path_offset": path_offset,
+                },
+            )
+
+        rsz_start = writer.tell()
+        rsz_header_offset = writer.tell()
+        writer.write(b"\x00" * rsz_layout.header_size)
         for root_id in root_ids:
-            rsz_writer.write_struct("<i", root_id)
-        rsz_writer.pad_to(instance_offset)
-        # Preserve instance numbering and reference identity; RSZ object links depend on
-        # these indexes remaining stable.
-        rsz_writer.write_struct("<II", 0, 0)
+            writer.write_struct("<i", root_id)
+        instance_offset = writer.tell() - rsz_start
+
+        null_entry_offset = writer.tell()
+        writer.write(b"\x00" * rsz_layout.instance_entry_size)
+        self._patch_named_struct(
+            writer,
+            null_entry_offset,
+            rsz_layout.instance_entry_struct,
+            rsz_layout.instance_entry_fields,
+            {"type_hash": 0, "crc": 0, "reserved": 0},
+        )
         for spec in self.instances[1:]:
             if spec is None:
-                continue
-            rsz_writer.write_struct("<II", spec.class_hash, spec.class_def.crc)
-        rsz_writer.pad_to(data_offset)
-        rsz_writer.write(bytes(data_writer.data))
+                raise PackError("instance table contains an unexpected empty slot")
+            crc = spec.crc if isinstance(spec, ExternalUserdataSpec) else spec.class_def.crc
+            entry_offset = writer.tell()
+            writer.write(b"\x00" * rsz_layout.instance_entry_size)
+            self._patch_named_struct(
+                writer,
+                entry_offset,
+                rsz_layout.instance_entry_struct,
+                rsz_layout.instance_entry_fields,
+                {"type_hash": spec.class_hash, "crc": crc, "reserved": 0},
+            )
 
-        usr_writer = BinaryWriter()
-        # Apply RE Engine alignment and offset rules before touching binary fields;
-        # later table offsets assume this layout.
-        usr_writer.write_struct("<IiiiQQQ", self.user_magic, 0, 0, 0, 0x30, 0x30, 0x30)
-        usr_writer.write(b"\x00" * 8)
-        usr_writer.write(bytes(rsz_writer.data))
-        return bytes(usr_writer.data)
+        if rsz_userdata:
+            self._align_from_base(
+                writer,
+                rsz_layout.rsz_userdata_alignment,
+                rsz_layout.rsz_userdata_alignment_base,
+                rsz_start,
+            )
+            userdata_offset = writer.tell() - rsz_start
+            rsz_userdata_entry_offsets: list[int] = []
+            for _item in rsz_userdata:
+                rsz_userdata_entry_offsets.append(writer.tell())
+                writer.write(b"\x00" * rsz_layout.rsz_userdata_entry_size)
+            rsz_userdata_path_offsets: list[int] = []
+            for item in rsz_userdata:
+                rsz_userdata_path_offsets.append(writer.tell() - rsz_start)
+                self._write_usr_path(writer, item.path, layout.path_encoding)
+            for entry_offset, item, path_offset in zip(
+                rsz_userdata_entry_offsets,
+                rsz_userdata,
+                rsz_userdata_path_offsets,
+            ):
+                self._patch_named_struct(
+                    writer,
+                    entry_offset,
+                    rsz_layout.rsz_userdata_entry_struct,
+                    rsz_layout.rsz_userdata_entry_fields,
+                    {
+                        "instance_id": item.instance_id,
+                        "type_hash": item.type_hash,
+                        "path_offset": path_offset,
+                    },
+                )
+        else:
+            userdata_offset = -1
+
+        self._align_from_base(
+            writer,
+            rsz_layout.rsz_data_alignment,
+            rsz_layout.rsz_data_alignment_base,
+            rsz_start,
+        )
+        data_offset = writer.tell() - rsz_start
+        if userdata_offset < 0:
+            userdata_offset = data_offset
+        writer.write(bytes(data_writer.data))
+
+        self._patch_named_struct(
+            writer,
+            rsz_header_offset,
+            rsz_layout.header_struct,
+            rsz_layout.header_fields,
+            {
+                "magic": self.rsz_magic,
+                "version": rsz_version,
+                "object_count": len(root_ids),
+                "instance_count": len(self.instances),
+                "userdata_count": len(rsz_userdata),
+                "reserved": rsz_reserved,
+                "instance_offset": instance_offset,
+                "data_offset": data_offset,
+                "userdata_offset": userdata_offset,
+            },
+        )
+        self._patch_named_struct(
+            writer,
+            0,
+            layout.header_struct,
+            layout.header_fields,
+            {
+                "signature": self.user_magic,
+                "resource_count": len(usr_resources),
+                "userdata_count": len(usr_userdata),
+                "info_count": 0,
+                "resource_info_tbl": resource_info_tbl,
+                "userdata_info_tbl": userdata_info_tbl,
+                "data_offset": rsz_start,
+            },
+        )
+        return bytes(writer.data)
+
+    @staticmethod
+    def _patch_named_struct(
+        writer: BinaryWriter,
+        offset: int,
+        fmt: str,
+        fields: tuple[str, ...],
+        values: dict[str, int],
+    ) -> None:
+        """Patch a declarative layout structure from its named values."""
+
+        try:
+            ordered = [values[field] for field in fields]
+        except KeyError as exc:
+            raise PackError(f"missing layout field value: {exc.args[0]}") from exc
+        writer.patch_struct(offset, fmt, *ordered)
+
+    @staticmethod
+    def _write_usr_path(writer: BinaryWriter, path: str, encoding: str) -> None:
+        if encoding != "utf-16-le-z":
+            raise PackError(f"unsupported USR path encoding: {encoding}")
+        writer.write(f"{path}\x00".encode("utf-16-le"))
+
+    @staticmethod
+    def _align_from_base(
+        writer: BinaryWriter,
+        alignment: int,
+        base_kind: str,
+        rsz_start: int,
+    ) -> None:
+        if base_kind == "file":
+            writer.align(alignment)
+            return
+        if base_kind == "rsz":
+            relative = writer.tell() - rsz_start
+            writer.pad_to(rsz_start + align(relative, alignment))
+            return
+        raise PackError(f"unsupported alignment base: {base_kind}")
 
     def _write_instance(self, writer: BinaryWriter, spec: InstanceSpec) -> None:
         """Write instance.
@@ -206,6 +422,9 @@ class PackerWriterMixin:
             # Decode strings and GUID-like values conservatively so invalid data does
             # not corrupt subsequent parsing.
             writer.align(4)
+            if value is None or value == "":
+                writer.write_struct("<I", 0)
+                return
             raw = f"{value or ''}\x00".encode("utf-16-le")
             writer.write_struct("<I", len(raw) // 2)
             writer.write(raw)
@@ -213,6 +432,9 @@ class PackerWriterMixin:
         if t in {"C8", "RuntimeType"}:
             # C8-style strings store UTF-8 byte length and keep a trailing null byte in the binary stream.
             writer.align(4)
+            if value is None or value == "":
+                writer.write_struct("<I", 0)
+                return
             raw = f"{value or ''}\x00".encode("utf-8")
             writer.write_struct("<I", len(raw))
             writer.write(raw)

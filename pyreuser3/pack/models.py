@@ -61,6 +61,41 @@ class InstanceSpec:
     fields: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ExternalUserdataSpec:
+    """Describe an RSZ instance whose payload lives in another .user file."""
+
+    class_hash: int
+    crc: int
+    path: str
+
+
+@dataclass(frozen=True)
+class UsrResourceSpec:
+    """Preserve one ordered USR resource dependency table entry."""
+
+    path: str
+    reserved: int = 0
+
+
+@dataclass(frozen=True)
+class UsrUserdataSpec:
+    """Preserve one ordered outer USR userdata dependency table entry."""
+
+    class_hash: int
+    crc: int
+    path: str
+
+
+@dataclass(frozen=True)
+class RszUserdataSpec:
+    """Preserve one ordered embedded RSZ userdata dependency table entry."""
+
+    instance_id: int
+    type_hash: int
+    path: str
+
+
 class BinaryWriter:
     """Small byte buffer helper that writes little-endian primitive values and alignment
     padding for the packer.
@@ -116,6 +151,17 @@ class BinaryWriter:
             None. The method performs its documented side effect in place and raises on invalid input.
         """
         self.write(struct.pack(fmt, *values))
+
+    def patch_struct(self, offset: int, fmt: str, *values: Any) -> None:
+        """Overwrite an already reserved structure without changing buffer size."""
+
+        raw = struct.pack(fmt, *values)
+        end = offset + len(raw)
+        if offset < 0 or end > len(self.data):
+            raise PackError(
+                f"cannot patch structure outside buffer: {offset}+{len(raw)}"
+            )
+        self.data[offset:end] = raw
 
     def align(self, alignment: int) -> None:
         """Round an offset up to the requested byte alignment.

@@ -56,11 +56,20 @@ pyreuser3 export \
   -p <il2cpp_dump.json>
 ```
 
-将 JSON 封回 `.user.3`：
+导出完整 repack JSON，然后封回 `.user.3`：
+
+```bash
+pyreuser3 export \
+  -i <输入的-user3-文件或目录> \
+  -s <RE_RSZ-schema.json> \
+  -o <repack-JSON-输出目录> \
+  -p <il2cpp_dump.json> \
+  --json-format repack
+```
 
 ```bash
 pyreuser3 pack \
-  -j <输入的-JSON-文件或目录> \
+  -j <输入的-repack-JSON-文件或目录> \
   -s <RE_RSZ-schema.json> \
   -o <user3-输出目录> \
   -p <il2cpp_dump.json>
@@ -118,8 +127,14 @@ converter.export_file(
     "json/OtomonData.user.3.json",
 )
 
+# 封包只接受完整 repack 文档；readable 导出仅供读取。
+converter.export_file(
+    "input/OtomonData.user.3",
+    "json/OtomonData.user.3.pack.json",
+    json_format="repack",
+)
 converter.pack_file(
-    "json/OtomonData.user.3.json",
+    "json/OtomonData.user.3.pack.json",
     "mod/OtomonData.user.3",
 )
 ```
@@ -138,12 +153,18 @@ repack_data = converter.user3_to_json(
 )
 ```
 
-使用 `json_format="readable"` 时返回与 `export_file()` 一致的可读导出结构；使用 `json_format="repack"` 时返回可传给 `pack()` 的完整实例表结构。
+使用 `json_format="readable"` 时返回与 `export_file()` 一致的只读导出结构；使用
+`json_format="repack"` 时返回可传给 `pack()` 的完整实例表结构。封回器会拒绝 readable JSON。
 
 枚举字段会按照真实底层存储宽度输出为 `[数值] 名称`。标量位标志枚举输出为标签数组；
 ``ace.Bitset`1<T>`` 输出为枚举索引标签，并保留 `_MaxElement` 与 `_WordCount`，因此未知位和
-填充词也可以无损封回。新的 repack 文档格式为 `re_user3_pack_v2`，封回器仍兼容使用原始
-数值词数组的 v1 文档。
+填充词也可以无损封回。新的 repack 文档格式为 `re_user3_pack_v3`，它会分别记录自动探测到的
+USR 外层布局、RSZ 头族和文件中的真实 RSZ 版本，并保留 resource 与 userdata 依赖表。布局
+候选及其读取/回封能力状态集中声明在 `pyreuser3/usr_layouts.py`，RSZ 字段定义仍来自传入的
+REFramework 兼容模板。已验证的现代头族接受通过完整结构校验的 RSZ v4+ 文件，并原样保留
+版本号，不再固定为 MHWS 的版本 16。实验性的物理 H28 与 legacy RSZ v3 候选暂时只读，获得
+真实样本并完成逐字节回封验证后才能启用 repack。v1 和 v2 文档仍可识别以便诊断，但由于缺少
+必要的布局元数据，封回前必须从源文件重新导出为 v3。
 
 批量处理目录：
 
@@ -158,6 +179,7 @@ converter = REUser3Converter(
 export_result = converter.export_directory(
     "D:/game/unpacked",
     "D:/game/json",
+    json_format="repack",
 )
 
 pack_result = converter.pack_directory(

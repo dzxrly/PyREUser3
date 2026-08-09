@@ -21,8 +21,11 @@ RSZ_MAGIC = 5919570
 # Preserve instance numbering and reference identity; RSZ object links depend on these
 # indexes remaining stable.
 PACK_JSON_FORMAT_V1 = "re_user3_pack_v1"
-PACK_JSON_FORMAT = "re_user3_pack_v2"
-PACK_JSON_FORMATS = frozenset({PACK_JSON_FORMAT_V1, PACK_JSON_FORMAT})
+PACK_JSON_FORMAT_V2 = "re_user3_pack_v2"
+PACK_JSON_FORMAT = "re_user3_pack_v3"
+PACK_JSON_FORMATS = frozenset(
+    {PACK_JSON_FORMAT_V1, PACK_JSON_FORMAT_V2, PACK_JSON_FORMAT}
+)
 # Decode strings and GUID-like values conservatively so invalid data does not corrupt
 # subsequent parsing.
 HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")

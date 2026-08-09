@@ -43,6 +43,7 @@ class User3Exporter(
         il2cpp_dump_path: str | Path = "",
         user_magic: int = USR_MAGIC,
         rsz_magic: int = RSZ_MAGIC,
+        json_format: str = "readable",
     ):
         """Initialize User3Exporter with validated configuration and state.
 
@@ -57,6 +58,8 @@ class User3Exporter(
             il2cpp_dump_path (str | Path): Path to il2cpp_dump.json for enum metadata.
             user_magic (int): Expected magic value for the outer .user.3 container header.
             rsz_magic (int): Expected magic value for embedded RSZ blocks.
+            json_format (str): "readable" for display-only trees or "repack" for
+            full pack documents.
 
         Returns:
             None. The method performs its documented side effect in place and raises on invalid input.
@@ -77,6 +80,10 @@ class User3Exporter(
         self.tree_depth = self._normalize_tree_depth(tree_depth)
         self.user_magic = int(user_magic)
         self.rsz_magic = int(rsz_magic)
+        normalized_format = str(json_format).strip().lower().replace("-", "_")
+        if normalized_format not in {"readable", "repack"}:
+            raise ValueError("json_format must be 'readable' or 'repack'")
+        self.json_format = normalized_format
         self.exclude_regexes = exclude_regexes or []
         self._exclude_patterns = [re.compile(p) for p in self.exclude_regexes]
         self.schema_path = self._resolve_schema_path(self.schema_dir)
@@ -155,10 +162,13 @@ class User3Exporter(
             # and numeric packing stay reversible.
             # Preserve the exported JSON structure so external scripts and hand-edited
             # files remain compatible across workflows.
-            tree = self._parse_user3(user3_file)
-            tree = self._postprocess_enum_nodes(tree)
-            tree = self._finalize_export_tree(tree)
-            tree = self._round_export_floats(tree)
+            if self.json_format == "repack":
+                tree = self._parse_user3_pack(user3_file)
+            else:
+                tree = self._parse_user3(user3_file)
+                tree = self._postprocess_enum_nodes(tree)
+                tree = self._finalize_export_tree(tree)
+                tree = self._round_export_floats(tree)
             output_path = self._output_path_for(user3_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             with output_path.open("w", encoding="utf-8") as f:
@@ -254,5 +264,6 @@ class User3Exporter(
             relative_parent = Path()
         else:
             relative_parent = user3_file.relative_to(self.user3_root).parent
-        output_name = f"{user3_file.name}.json"
+        suffix = ".pack.json" if self.json_format == "repack" else ".json"
+        output_name = f"{user3_file.name}{suffix}"
         return self.output_root / relative_parent / output_name

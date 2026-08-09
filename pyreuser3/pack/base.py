@@ -11,14 +11,26 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .models import InstanceSpec
+from .models import (
+    ExternalUserdataSpec,
+    InstanceSpec,
+    RszUserdataSpec,
+    UsrResourceSpec,
+    UsrUserdataSpec,
+)
 from .plan import PackerPlanMixin
 from .writer import PackerWriterMixin
-from ..core import RSZ_MAGIC, USR_MAGIC, resolve_schema_path
+from ..core import PACK_JSON_FORMATS, RSZ_MAGIC, USR_MAGIC, resolve_schema_path
 from ..enum_codec import is_probable_flags_enum
 from ..export import User3Exporter
 from ..rich_ui import BatchProgress
 from ..schema import TypeDB
+from ..usr_layouts import (
+    DEFAULT_RSZ_HEADER_LAYOUT_ID,
+    DEFAULT_USR_LAYOUT_ID,
+    get_rsz_header_layout,
+    get_usr_layout,
+)
 
 
 class User3Packer(PackerPlanMixin, PackerWriterMixin):
@@ -77,7 +89,26 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
                 enum_type, value_map, self.enum_underlying_types.get(enum_type)
             )
         }
-        self.instances: list[InstanceSpec | None] = []
+        self.instances: list[InstanceSpec | ExternalUserdataSpec | None] = []
+        self.usr_layout = get_usr_layout(DEFAULT_USR_LAYOUT_ID)
+        if self.usr_layout is None:
+            raise RuntimeError(f"default USR layout is not registered: {DEFAULT_USR_LAYOUT_ID}")
+        self.rsz_header_layout = get_rsz_header_layout(
+            DEFAULT_RSZ_HEADER_LAYOUT_ID
+        )
+        if self.rsz_header_layout is None:
+            raise RuntimeError(
+                "default RSZ header layout is not registered: "
+                f"{DEFAULT_RSZ_HEADER_LAYOUT_ID}"
+            )
+        self.usr_header_padding = b"\x00" * self.usr_layout.header_padding_size
+        self.usr_resources: list[UsrResourceSpec] = []
+        self.usr_userdata: list[UsrUserdataSpec] = []
+        # A numeric RSZ version must be loaded from repack metadata.  The modern
+        # header family is shared across games and must not imply MHWS version 16.
+        self.rsz_version: int | None = None
+        self.rsz_reserved = 0
+        self.rsz_userdata: list[RszUserdataSpec] = []
 
     def pack_json_file(self, json_path: str | Path, output_path: str | Path) -> Path:
         """Pack json file.
@@ -131,13 +162,17 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         else:
             if not source_root.is_dir():
                 raise FileNotFoundError(f"json root not found: {source_root}")
-            # Preserve the exported JSON structure so external scripts and hand-edited
-            # files remain compatible across workflows.
-            files = sorted(source_root.rglob("*.user.3.pack.json"))
-            if not files:
-                files = sorted(source_root.rglob("*.user.3.json"))
-            if not files:
-                files = sorted(source_root.rglob("*.json"))
+            # Only documents that explicitly identify themselves as repack JSON are
+            # candidates. Readable exports are never sent to the packer.
+            named_pack_files = set(source_root.rglob("*.user.3.pack.json"))
+            files = sorted(
+                named_pack_files
+                | {
+                    path
+                    for path in source_root.rglob("*.json")
+                    if path not in named_pack_files and self._is_repack_json_file(path)
+                }
+            )
         candidates: list[tuple[Path, str]] = []
         for json_file in files:
             rel = (
@@ -174,6 +209,21 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
                 progress.update(1)
         return {"total": total, "success": success, "failed": failed}
 
+    @staticmethod
+    def _is_repack_json_file(path: Path) -> bool:
+        """Return whether a directory candidate declares a supported repack format."""
+
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                data = json.load(stream)
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return False
+        return (
+            isinstance(data, dict)
+            and data.get("_format") in PACK_JSON_FORMATS
+            and isinstance(data.get("_instances"), dict)
+        )
+
     def pack(self, data: Any) -> bytes:
         """Encode an in-memory JSON tree as .user.3 bytes.
 
@@ -186,15 +236,9 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         Returns:
             bytes: Encoded binary data ready to write to disk.
         """
-        # Preserve instance numbering and reference identity; RSZ object links depend on
-        # these indexes remaining stable.
-        if self._is_pack_document(data):
-            roots = self._plan_pack_document(data)
-        else:
-            self.instances = [None]
-            roots: list[int] = []
-            for node in self._normalize_roots(data):
-                roots.append(self._plan_node(node))
+        # Readable trees deliberately omit physical container metadata and are therefore
+        # never accepted as pack input.
+        roots = self._plan_repack_input(data)
         return self._build_binary(roots)
 
     def output_path_for(

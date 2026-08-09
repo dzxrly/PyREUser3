@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import BinaryReader, PACK_JSON_FORMAT, ParseError, align
+from ..usr_container import detect_usr_layout
 
 
 class ExporterUser3ParserMixin:
@@ -32,75 +33,36 @@ class ExporterUser3ParserMixin:
         Raises:
             ParseError: Binary data did not match the expected .user.3 or RSZ layout.
         """
-        reader = BinaryReader(user3_path.read_bytes())
-
-        # The outer .user.3 container starts with a USR header; callers may override magic for game variants.
-        magic = reader.read_u32()
-        if magic != self.user_magic:
-            raise ParseError(f"not a user file: magic={magic}")
-
-        usr_header = {
-            "signature": magic,
-            "resource_count": reader.read_s32(),
-            "userdata_count": reader.read_s32(),
-            "info_count": reader.read_s32(),
-            "resource_info_tbl": reader.read_u64(),
-            "userdata_info_tbl": reader.read_u64(),
-            "data_offset": reader.read_u64(),
-        }
+        raw_data = user3_path.read_bytes()
+        detected_usr = detect_usr_layout(raw_data, self.user_magic, self.rsz_magic)
+        reader = BinaryReader(raw_data)
+        usr_header = dict(detected_usr.header)
+        resource_infos = [
+            {"path": item.path, "reserved": item.reserved}
+            for item in detected_usr.resources
+        ]
         header_userdata_infos: list[dict[str, Any]] = []
-        if usr_header["userdata_count"] > 0 and usr_header["userdata_info_tbl"] > 0:
-            try:
-                # Resolve and validate paths at the boundary so later code never guesses
-                # relative to a surprising working directory.
-                reader.seek(usr_header["userdata_info_tbl"])
-                for idx in range(usr_header["userdata_count"]):
-                    class_hash = reader.read_u32()
-                    crc = reader.read_u32()
-                    path_offset = reader.read_u64()
-                    class_def = self.typedb.get_class(class_hash, crc)
-                    class_name = (
-                        class_def.name
-                        if class_def
-                        else "Unknown Class"
-                    )
-                    header_userdata_infos.append(
-                        {
-                            "index": idx,
-                            "class_hash": class_hash,
-                            "class_name": class_name,
-                            "path": reader.read_wstring_null(path_offset),
-                        }
-                    )
-            except Exception:
-                # Treat each file independently so one malformed resource is reported
-                # but does not stop the rest of the batch.
-                header_userdata_infos = []
+        for idx, item in enumerate(detected_usr.userdata):
+            class_def = self.typedb.get_class(item.class_hash, item.crc)
+            header_userdata_infos.append(
+                {
+                    "index": idx,
+                    "class_hash": item.class_hash,
+                    "crc": item.crc,
+                    "class_name": class_def.name if class_def else "Unknown Class",
+                    "path": item.path,
+                }
+            )
 
         rsz_start = usr_header["data_offset"]
 
         # Apply RE Engine alignment and offset rules before touching binary fields;
         # later table offsets assume this layout.
-        reader.seek(rsz_start)
-        rsz_header = {
-            "magic": reader.read_u32(),
-            "version": reader.read_u32(),
-            "object_count": reader.read_s32(),
-            "instance_count": reader.read_s32(),
-            "userdata_count": reader.read_s32(),
-            "reserved": reader.read_s32(),
-            "instance_offset": reader.read_s64(),
-            "data_offset": reader.read_s64(),
-            "userdata_offset": reader.read_s64(),
-        }
-        if rsz_header["magic"] != self.rsz_magic:
-            raise ParseError(
-                f"RSZ magic mismatch at data_offset: {rsz_header['magic']}"
-            )
+        rsz_header = dict(detected_usr.rsz_header)
 
         # Preserve instance numbering and reference identity; RSZ object links depend on
         # these indexes remaining stable.
-        reader.seek(rsz_start + 48)
+        reader.seek(rsz_start + detected_usr.rsz_layout.header_size)
         object_table = [
             reader.read_s32() for _i in range(max(rsz_header["object_count"], 0))
         ]
@@ -111,8 +73,10 @@ class ExporterUser3ParserMixin:
         for idx in range(max(rsz_header["instance_count"], 0)):
             # Preserve instance numbering and reference identity; RSZ object links
             # depend on these indexes remaining stable.
+            entry_start = reader.tell()
             class_hash = reader.read_u32()
             crc = reader.read_u32()
+            reader.seek(entry_start + detected_usr.rsz_layout.instance_entry_size)
             class_def = self.typedb.get_class(class_hash, crc)
             instance_infos.append(
                 {
@@ -127,26 +91,29 @@ class ExporterUser3ParserMixin:
 
         rsz_userdata_instance_ids: list[int] = []
         rsz_userdata_path_by_instance: dict[int, str] = {}
+        rsz_userdata_infos: list[dict[str, Any]] = []
         if rsz_header["userdata_count"] > 0 and rsz_header["userdata_offset"] > 0:
-            try:
-                # Preserve instance numbering and reference identity; RSZ object links
-                # depend on these indexes remaining stable.
-                reader.seek(rsz_start + rsz_header["userdata_offset"])
-                for _i in range(rsz_header["userdata_count"]):
-                    instance_id = reader.read_s32()
-                    _type_hash = reader.read_u32()
-                    path_offset = reader.read_u64()
-                    if instance_id >= 0:
-                        rsz_userdata_instance_ids.append(instance_id)
-                        path = ""
-                        if path_offset > 0 and rsz_start + path_offset < reader.size:
-                            path = reader.read_wstring_null(rsz_start + path_offset)
-                        rsz_userdata_path_by_instance[instance_id] = path
-            except Exception:
-                # Treat each file independently so one malformed resource is reported
-                # but does not stop the rest of the batch.
-                rsz_userdata_instance_ids = []
-                rsz_userdata_path_by_instance = {}
+            # Preserve instance numbering and reference identity; RSZ object links
+            # depend on these indexes remaining stable.
+            reader.seek(rsz_start + rsz_header["userdata_offset"])
+            for table_index in range(rsz_header["userdata_count"]):
+                instance_id = reader.read_s32()
+                type_hash = reader.read_u32()
+                path_offset = reader.read_u64()
+                if instance_id <= 0 or instance_id >= rsz_header["instance_count"]:
+                    raise ParseError(
+                        f"RSZ userdata {table_index} has invalid instance id {instance_id}"
+                    )
+                path = reader.read_wstring_null(rsz_start + path_offset)
+                rsz_userdata_instance_ids.append(instance_id)
+                rsz_userdata_path_by_instance[instance_id] = path
+                rsz_userdata_infos.append(
+                    {
+                        "instance_id": instance_id,
+                        "type_hash": type_hash,
+                        "path": path,
+                    }
+                )
         rsz_userdata_instance_set = set(rsz_userdata_instance_ids)
 
         parsed_instances: list[dict[str, Any]] = []
@@ -257,7 +224,17 @@ class ExporterUser3ParserMixin:
         return {
             "user3_path": user3_path,
             "usr_header": usr_header,
+            "usr_layout_id": detected_usr.layout.identifier,
+            "usr_layout_status": detected_usr.layout.status,
+            "usr_layout_repack_supported": detected_usr.layout.repack_supported,
+            "usr_header_padding": detected_usr.header_padding,
+            "resource_infos": resource_infos,
             "rsz_header": rsz_header,
+            "rsz_header_layout_id": detected_usr.rsz_layout.identifier,
+            "rsz_header_layout_status": detected_usr.rsz_layout.status,
+            "rsz_header_layout_repack_supported": (
+                detected_usr.rsz_layout.repack_supported
+            ),
             "object_roots": object_roots,
             "instance_infos": instance_infos,
             "instance_info_map": instance_info_map,
@@ -266,6 +243,7 @@ class ExporterUser3ParserMixin:
             "header_userdata_infos": header_userdata_infos,
             "rsz_userdata_instance_ids": rsz_userdata_instance_ids,
             "rsz_userdata_path_by_instance": rsz_userdata_path_by_instance,
+            "rsz_userdata_infos": rsz_userdata_infos,
         }
 
     def _parse_user3(self, user3_path: Path) -> list[dict[str, Any]]:
@@ -353,14 +331,26 @@ class ExporterUser3ParserMixin:
         rsz_header = document["rsz_header"]
 
         # Instance 0 is the null reference slot and is represented as None in the exported document.
-        if int(usr_header.get("resource_count", 0)) > 0:
-            unsupported.append("USR resource table")
-        if int(usr_header.get("userdata_count", 0)) > 0:
-            unsupported.append("USR userdata table")
         if int(usr_header.get("info_count", 0)) > 0:
             unsupported.append("USR info table")
-        if int(rsz_header.get("userdata_count", 0)) > 0:
-            unsupported.append("RSZ userdata table")
+        if not document["usr_layout_repack_supported"]:
+            unsupported.append(
+                f"read-only USR layout: {document['usr_layout_id']}"
+            )
+        if not document["rsz_header_layout_repack_supported"]:
+            unsupported.append(
+                "read-only RSZ header layout: "
+                f"{document['rsz_header_layout_id']}"
+            )
+        if document["usr_layout_status"] != "verified":
+            warnings.append(
+                f"experimental USR layout detected: {document['usr_layout_id']}"
+            )
+        if document["rsz_header_layout_status"] != "verified":
+            warnings.append(
+                "experimental RSZ header layout detected: "
+                f"{document['rsz_header_layout_id']}"
+            )
 
         for info in document["instance_infos"]:
             idx = int(info["index"])
@@ -384,10 +374,6 @@ class ExporterUser3ParserMixin:
             elif inst.get("is_userdata_reference"):
                 entry["_kind"] = "userdata_reference"
                 entry["path"] = path_by_userdata.get(idx, inst.get("path", ""))
-                warnings.append(
-                    f"instance {idx} is an external userdata reference and "
-                    "cannot be rebuilt by the current minimal writer"
-                )
             elif inst.get("unparsed"):
                 entry["_unparsed"] = True
                 entry["reason"] = inst.get("reason", "unparsed")
@@ -413,7 +399,7 @@ class ExporterUser3ParserMixin:
 
         return {
             "_format": PACK_JSON_FORMAT,
-            "_version": 2,
+            "_version": 3,
             "_source": {
                 "file": str(document["user3_path"]),
                 "user_magic": self._format_hex_u32(self.user_magic),
@@ -424,15 +410,45 @@ class ExporterUser3ParserMixin:
                 "info_count": int(usr_header.get("info_count", 0)),
                 "rsz_userdata_count": int(rsz_header.get("userdata_count", 0)),
             },
+            "_layout": {
+                "usr": document["usr_layout_id"],
+                "rsz_header": document["rsz_header_layout_id"],
+                "rsz_version": int(rsz_header["version"]),
+                "rsz_reserved": int(rsz_header["reserved"]),
+            },
+            "_usr": {
+                "header_padding_hex": document["usr_header_padding"].hex(),
+                "resources": [
+                    {
+                        "path": item["path"],
+                        "reserved": self._format_hex_u32(int(item["reserved"])),
+                    }
+                    for item in document["resource_infos"]
+                ],
+                "userdata": [
+                    {
+                        "class_hash": self._format_hex_u32(
+                            int(item["class_hash"])
+                        ),
+                        "crc": self._format_hex_u32(int(item["crc"])),
+                        "path": item["path"],
+                    }
+                    for item in document["header_userdata_infos"]
+                ],
+                "info": [],
+            },
+            "_rsz": {
+                "userdata": [
+                    {
+                        "instance_id": int(item["instance_id"]),
+                        "type_hash": self._format_hex_u32(int(item["type_hash"])),
+                        "path": item["path"],
+                    }
+                    for item in document["rsz_userdata_infos"]
+                ]
+            },
             "_roots": document["object_roots"],
             "_instances": instances,
-            "_userdata": [
-                {
-                    "instance_id": int(instance_id),
-                    "path": path_by_userdata.get(instance_id, ""),
-                }
-                for instance_id in document["rsz_userdata_instance_ids"]
-            ],
             "_unsupported": unsupported,
             "_warnings": warnings,
         }

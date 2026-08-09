@@ -1,4 +1,4 @@
-"""Convert readable JSON or full pack-format JSON into a stable list of RSZ instance specifications.
+"""Convert full repack JSON into a stable list of RSZ instance specifications.
 
 Planning validates references, resolves class names to schema hashes, fills defaults for
 missing fields, and rejects layouts that would be lossy to rebuild.
@@ -8,15 +8,28 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import InstanceRef, InstanceSpec, PackError, StructValue
-from ..core import PACK_JSON_FORMATS
+from .models import (
+    ExternalUserdataSpec,
+    InstanceRef,
+    InstanceSpec,
+    PackError,
+    RszUserdataSpec,
+    StructValue,
+    UsrResourceSpec,
+    UsrUserdataSpec,
+)
+from ..core import PACK_JSON_FORMAT, PACK_JSON_FORMATS
 from ..enum_codec import bitset_enum_type, encode_bitset, encode_flags
 from ..schema import ClassDef, FieldDef
+from ..usr_layouts import (
+    get_rsz_header_layout,
+    get_usr_layout,
+    rsz_header_layouts_for_version,
+)
 
 
 class PackerPlanMixin:
-    """Plan packable RSZ instances from readable JSON or the full pack-format JSON document.
-    """
+    """Plan packable RSZ instances from a full repack-format JSON document."""
 
     def _is_pack_document(self, data: Any) -> bool:
         """Return whether the input is pack document.
@@ -35,6 +48,15 @@ class PackerPlanMixin:
             and data.get("_format") in PACK_JSON_FORMATS
             and isinstance(data.get("_instances"), dict)
         )
+
+    def _plan_repack_input(self, data: Any) -> list[int]:
+        """Reject readable JSON and plan the only supported pack input shape."""
+
+        if not self._is_pack_document(data):
+            raise PackError(
+                "packing requires repack JSON; readable JSON is read-only"
+            )
+        return self._plan_pack_document(data)
 
     def _plan_pack_document(self, data: dict[str, Any]) -> list[int]:
         """Plan pack document.
@@ -59,6 +81,8 @@ class PackerPlanMixin:
                 "pack JSON contains original data sections that the current "
                 f"writer cannot rebuild: {unsupported}"
             )
+
+        self._plan_container_metadata(data)
 
         instances_raw = data.get("_instances")
         if not isinstance(instances_raw, dict):
@@ -90,10 +114,19 @@ class PackerPlanMixin:
                     f"instance {idx} is unparsed and cannot be packed: {reason}"
                 )
             if entry.get("_kind") == "userdata_reference":
-                raise PackError(
-                    f"instance {idx} is an external userdata reference; "
-                    "the current writer cannot rebuild RSZ userdata tables"
+                class_hash = self._parse_required_u32(
+                    entry.get("_hash"), f"instance {idx} _hash"
                 )
+                crc = self._parse_required_u32(
+                    entry.get("_crc"), f"instance {idx} _crc"
+                )
+                path = self._parse_path(entry.get("path"), f"instance {idx} path")
+                self.instances[idx] = ExternalUserdataSpec(
+                    class_hash=class_hash,
+                    crc=crc,
+                    path=path,
+                )
+                continue
             class_name = entry.get("_class")
             if not isinstance(class_name, str) or not class_name:
                 raise PackError(f"instance {idx} is missing _class")
@@ -121,12 +154,14 @@ class PackerPlanMixin:
                 class_hash=class_hash, class_def=class_def
             )
 
+        self._validate_userdata_metadata()
+
         # Preserve instance numbering and reference identity; RSZ object links depend on
         # these indexes remaining stable.
         for idx in ids[1:]:
             entry = instances_raw[str(idx)]
             spec = self.instances[idx]
-            if spec is None:
+            if spec is None or isinstance(spec, ExternalUserdataSpec):
                 continue
             fields = entry.get("fields", {})
             if not isinstance(fields, dict):
@@ -142,7 +177,249 @@ class PackerPlanMixin:
                     f"instance {idx} contains embedded object data; "
                     "pack JSON object fields must use ref_instance_id"
                 )
+        self._validate_resource_metadata()
         return roots
+
+    def _plan_container_metadata(self, data: dict[str, Any]) -> None:
+        """Load layout-specific USR and RSZ metadata before planning instances."""
+
+        format_name = data.get("_format")
+        self.pack_json_format = format_name
+        if format_name != PACK_JSON_FORMAT:
+            raise PackError(
+                f"{format_name} does not record USR/RSZ layout metadata; "
+                "re-export the source file as repack v3 before packing"
+            )
+
+        raw_layout = data.get("_layout")
+        if not isinstance(raw_layout, dict):
+            raise PackError("repack v3 must contain a _layout object")
+        layout_id = raw_layout.get("usr")
+        if not isinstance(layout_id, str) or not layout_id:
+            raise PackError("repack v3 _layout.usr must be a layout id")
+        layout = get_usr_layout(layout_id)
+        if layout is None:
+            raise PackError(f"unknown USR layout id: {layout_id}")
+        if not layout.repack_supported:
+            raise PackError(f"USR layout {layout.identifier} is read-only")
+        version = raw_layout.get("rsz_version")
+        if not isinstance(version, int):
+            raise PackError("_layout.rsz_version must be an integer")
+        rsz_layout_id = raw_layout.get("rsz_header")
+        if rsz_layout_id is None:
+            inferred = rsz_header_layouts_for_version(version)
+            if len(inferred) != 1:
+                raise PackError(
+                    f"cannot infer one RSZ header layout for version {version}"
+                )
+            rsz_layout = inferred[0]
+        elif isinstance(rsz_layout_id, str) and rsz_layout_id:
+            rsz_layout = get_rsz_header_layout(rsz_layout_id)
+            if rsz_layout is None:
+                raise PackError(f"unknown RSZ header layout id: {rsz_layout_id}")
+        else:
+            raise PackError("repack v3 _layout.rsz_header must be a layout id")
+        if not rsz_layout.repack_supported:
+            raise PackError(f"RSZ header layout {rsz_layout.identifier} is read-only")
+        if not rsz_layout.supports_version(version):
+            raise PackError(
+                f"RSZ version {version} is not supported by header layout "
+                f"{rsz_layout.identifier}"
+            )
+        reserved = raw_layout.get("rsz_reserved", 0)
+        if not isinstance(reserved, int) or not -(1 << 31) <= reserved < (1 << 31):
+            raise PackError("_layout.rsz_reserved must be a signed 32-bit integer")
+
+        raw_usr = data.get("_usr")
+        if not isinstance(raw_usr, dict):
+            raise PackError("repack v3 must contain a _usr object")
+        padding_hex = raw_usr.get("header_padding_hex", "")
+        if not isinstance(padding_hex, str):
+            raise PackError("_usr.header_padding_hex must be hexadecimal text")
+        try:
+            padding = bytes.fromhex(padding_hex)
+        except ValueError as exc:
+            raise PackError("_usr.header_padding_hex is not valid hexadecimal") from exc
+        if len(padding) != layout.header_padding_size:
+            raise PackError(
+                f"layout {layout_id} requires {layout.header_padding_size} header "
+                f"padding bytes, got {len(padding)}"
+            )
+
+        raw_resources = raw_usr.get("resources")
+        if not isinstance(raw_resources, list):
+            raise PackError("_usr.resources must be an array")
+        resources: list[UsrResourceSpec] = []
+        for index, raw in enumerate(raw_resources):
+            if not isinstance(raw, dict):
+                raise PackError(f"_usr.resources[{index}] must be an object")
+            resources.append(
+                UsrResourceSpec(
+                    path=self._parse_path(
+                        raw.get("path"), f"_usr.resources[{index}].path"
+                    ),
+                    reserved=self._parse_required_u32(
+                        raw.get("reserved", 0),
+                        f"_usr.resources[{index}].reserved",
+                    ),
+                )
+            )
+        if resources and not layout.supports_resources:
+            raise PackError(f"layout {layout_id} cannot rebuild USR resources")
+
+        raw_usr_userdata = raw_usr.get("userdata")
+        if not isinstance(raw_usr_userdata, list):
+            raise PackError("_usr.userdata must be an array")
+        usr_userdata: list[UsrUserdataSpec] = []
+        for index, raw in enumerate(raw_usr_userdata):
+            if not isinstance(raw, dict):
+                raise PackError(f"_usr.userdata[{index}] must be an object")
+            usr_userdata.append(
+                UsrUserdataSpec(
+                    class_hash=self._parse_required_u32(
+                        raw.get("class_hash"),
+                        f"_usr.userdata[{index}].class_hash",
+                    ),
+                    crc=self._parse_required_u32(
+                        raw.get("crc", 0), f"_usr.userdata[{index}].crc"
+                    ),
+                    path=self._parse_path(
+                        raw.get("path"), f"_usr.userdata[{index}].path"
+                    ),
+                )
+            )
+        if usr_userdata and not layout.supports_usr_userdata:
+            raise PackError(f"layout {layout_id} cannot rebuild USR userdata")
+        raw_info = raw_usr.get("info")
+        if not isinstance(raw_info, list):
+            raise PackError("_usr.info must be an array")
+        if raw_info:
+            raise PackError(f"layout {layout_id} cannot rebuild a nonempty USR info table")
+
+        raw_rsz = data.get("_rsz")
+        if not isinstance(raw_rsz, dict):
+            raise PackError("repack v3 must contain a _rsz object")
+        raw_rsz_userdata = raw_rsz.get("userdata")
+        if not isinstance(raw_rsz_userdata, list):
+            raise PackError("_rsz.userdata must be an array")
+        rsz_userdata: list[RszUserdataSpec] = []
+        seen_instance_ids: set[int] = set()
+        for index, raw in enumerate(raw_rsz_userdata):
+            if not isinstance(raw, dict):
+                raise PackError(f"_rsz.userdata[{index}] must be an object")
+            instance_id = raw.get("instance_id")
+            if not isinstance(instance_id, int) or instance_id <= 0:
+                raise PackError(
+                    f"_rsz.userdata[{index}].instance_id must be a positive integer"
+                )
+            if instance_id in seen_instance_ids:
+                raise PackError(f"duplicate RSZ userdata instance id: {instance_id}")
+            seen_instance_ids.add(instance_id)
+            rsz_userdata.append(
+                RszUserdataSpec(
+                    instance_id=instance_id,
+                    type_hash=self._parse_required_u32(
+                        raw.get("type_hash"),
+                        f"_rsz.userdata[{index}].type_hash",
+                    ),
+                    path=self._parse_path(
+                        raw.get("path"), f"_rsz.userdata[{index}].path"
+                    ),
+                )
+            )
+        if rsz_userdata and not rsz_layout.supports_rsz_userdata:
+            raise PackError(
+                f"RSZ header layout {rsz_layout.identifier} cannot rebuild userdata"
+            )
+
+        self.usr_layout = layout
+        self.rsz_header_layout = rsz_layout
+        self.usr_header_padding = padding
+        self.usr_resources = resources
+        self.usr_userdata = usr_userdata
+        self.rsz_version = version
+        self.rsz_reserved = reserved
+        self.rsz_userdata = rsz_userdata
+
+    def _validate_userdata_metadata(self) -> None:
+        """Ensure outer and embedded userdata tables agree with instance metadata."""
+
+        external = {
+            index: spec
+            for index, spec in enumerate(self.instances)
+            if isinstance(spec, ExternalUserdataSpec)
+        }
+        listed_ids = {item.instance_id for item in self.rsz_userdata}
+        if listed_ids != set(external):
+            raise PackError(
+                "RSZ userdata table instance ids do not match userdata_reference "
+                f"instances: table={sorted(listed_ids)}, instances={sorted(external)}"
+            )
+        for item in self.rsz_userdata:
+            spec = external[item.instance_id]
+            if item.type_hash != spec.class_hash or item.path != spec.path:
+                raise PackError(
+                    f"RSZ userdata metadata does not match instance {item.instance_id}"
+                )
+        outer = [(item.class_hash, item.path) for item in self.usr_userdata]
+        embedded = [(item.type_hash, item.path) for item in self.rsz_userdata]
+        if outer != embedded:
+            raise PackError("USR userdata dependencies do not match RSZ userdata order")
+
+    def _validate_resource_metadata(self) -> None:
+        """Require every v3 RSZ Resource value to exist in the outer dependency table."""
+
+        if getattr(self, "pack_json_format", None) != PACK_JSON_FORMAT:
+            return
+        dependencies = {item.path for item in self.usr_resources}
+        missing: set[str] = set()
+        for spec in self.instances[1:]:
+            if isinstance(spec, InstanceSpec):
+                missing.update(
+                    path
+                    for path in self._iter_struct_resources(
+                        spec.class_def, spec.fields
+                    )
+                    if path and path not in dependencies
+                )
+        if missing:
+            raise PackError(
+                "RSZ Resource values are missing from _usr.resources: "
+                f"{sorted(missing)}"
+            )
+
+    def _iter_struct_resources(
+        self, class_def: ClassDef, fields: dict[str, Any]
+    ) -> list[str]:
+        resources: list[str] = []
+        for field_def in class_def.fields:
+            value = fields.get(field_def.name or "unnamed")
+            values = value if field_def.is_array and isinstance(value, list) else [value]
+            if field_def.field_type == "Resource":
+                resources.extend(item for item in values if isinstance(item, str) and item)
+                continue
+            if field_def.field_type != "Struct":
+                continue
+            for item in values:
+                if isinstance(item, StructValue):
+                    resources.extend(
+                        self._iter_struct_resources(item.class_def, item.fields)
+                    )
+        return resources
+
+    def _parse_required_u32(self, value: Any, label: str) -> int:
+        parsed = self._parse_optional_u32(value)
+        if parsed is None:
+            raise PackError(f"{label} is required")
+        return parsed
+
+    @staticmethod
+    def _parse_path(value: Any, label: str) -> str:
+        if not isinstance(value, str):
+            raise PackError(f"{label} must be a string")
+        if "\x00" in value:
+            raise PackError(f"{label} cannot contain a NUL character")
+        return value
 
     def _parse_pack_instance_ids(self, instances_raw: dict[str, Any]) -> list[int]:
         """Parse pack instance ids.

@@ -55,11 +55,20 @@ pyreuser3 export \
   -p <il2cpp_dump.json>
 ```
 
-Pack JSON back to `.user.3`:
+Export full repack JSON, then pack it back to `.user.3`:
+
+```bash
+pyreuser3 export \
+  -i <input-user3-file-or-directory> \
+  -s <RE_RSZ-schema.json> \
+  -o <repack-json-output-directory> \
+  -p <il2cpp_dump.json> \
+  --json-format repack
+```
 
 ```bash
 pyreuser3 pack \
-  -j <input-json-file-or-directory> \
+  -j <input-repack-json-file-or-directory> \
   -s <RE_RSZ-schema.json> \
   -o <user3-output-directory> \
   -p <il2cpp_dump.json>
@@ -90,8 +99,14 @@ converter.export_file(
     "json/OtomonData.user.3.json",
 )
 
+# Packing only accepts the full repack document. Readable exports are read-only.
+converter.export_file(
+    "input/OtomonData.user.3",
+    "json/OtomonData.user.3.pack.json",
+    json_format="repack",
+)
 converter.pack_file(
-    "json/OtomonData.user.3.json",
+    "json/OtomonData.user.3.pack.json",
     "mod/OtomonData.user.3",
 )
 ```
@@ -110,14 +125,24 @@ repack_data = converter.user3_to_json(
 )
 ```
 
-Use `json_format="readable"` for the same shape produced by `export_file()`, or `json_format="repack"` for the full instance-table document accepted by `pack()`.
+Use `json_format="readable"` for the same shape produced by `export_file()`. This
+shape is read-only. Use `json_format="repack"` for the full document accepted by
+`pack()`; the packer rejects readable JSON.
 
 Enum fields are rendered as `[numeric] Name` labels using the enum's actual storage
 width. Scalar flag enums are rendered as arrays of labels. ``ace.Bitset`1<T>`` values are
 rendered as enum-index labels together with `_MaxElement` and `_WordCount`, so unknown
 bits and padded word arrays remain reversible. Repack exports use
-`re_user3_pack_v2`; the packer continues to accept v1 documents with raw numeric Bitset
-word arrays.
+`re_user3_pack_v3`, which records the independently detected USR outer layout, RSZ
+header family, and numeric RSZ version while preserving resource and userdata
+dependency tables. Layout candidates and their read/repack capability status are
+declared in `pyreuser3/usr_layouts.py`; RSZ field definitions still come from the
+supplied REFramework-compatible schema. The verified modern header family accepts
+structurally valid RSZ v4+ files and preserves their original version instead of
+forcing MHWS version 16. Experimental physical H28 and legacy RSZ v3 candidates are
+read-only until real fixtures validate byte-for-byte repacking. V1 and v2 documents
+are recognized for diagnostics but must be re-exported as v3 before packing because
+they do not record the required layout metadata.
 
 For stable patch-and-repack workflows, use `patch_file()` or `parse_pack_file()`:
 

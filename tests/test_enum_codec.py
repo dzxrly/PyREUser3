@@ -1,6 +1,10 @@
 import unittest
 
-from pyreuser3.core import PACK_JSON_FORMAT, PACK_JSON_FORMAT_V1
+from pyreuser3.core import (
+    PACK_JSON_FORMAT,
+    PACK_JSON_FORMAT_V1,
+    PACK_JSON_FORMAT_V2,
+)
 from pyreuser3.enum_codec import (
     decode_bitset,
     decode_flags,
@@ -190,9 +194,13 @@ class EnumCodecTests(unittest.TestCase):
             {"_Value": 66},
         )
 
-    def test_pack_v1_and_v2_documents_are_recognized(self):
+    def test_all_repack_document_versions_are_recognized(self):
         plan = CodecPlan()
-        for format_name in (PACK_JSON_FORMAT_V1, PACK_JSON_FORMAT):
+        for format_name in (
+            PACK_JSON_FORMAT_V1,
+            PACK_JSON_FORMAT_V2,
+            PACK_JSON_FORMAT,
+        ):
             self.assertTrue(plan._is_pack_document({"_format": format_name, "_instances": {}}))
 
 
