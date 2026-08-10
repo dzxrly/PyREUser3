@@ -34,7 +34,16 @@ class ExporterUser3ParserMixin:
             ParseError: Binary data did not match the expected .user.3 or RSZ layout.
         """
         raw_data = user3_path.read_bytes()
-        detected_usr = detect_usr_layout(raw_data, self.user_magic, self.rsz_magic)
+        json_format = getattr(self, "json_format", "readable")
+        detection_policy = (
+            "verified_repack" if json_format == "repack" else "safe_read"
+        )
+        detected_usr = detect_usr_layout(
+            raw_data,
+            self.user_magic,
+            self.rsz_magic,
+            policy=detection_policy,
+        )
         reader = BinaryReader(raw_data)
         usr_header = dict(detected_usr.header)
         resource_infos = [
@@ -235,6 +244,7 @@ class ExporterUser3ParserMixin:
             "rsz_header_layout_repack_supported": (
                 detected_usr.rsz_layout.repack_supported
             ),
+            "layout_issues": detected_usr.issues,
             "object_roots": object_roots,
             "instance_infos": instance_infos,
             "instance_info_map": instance_info_map,
@@ -351,6 +361,20 @@ class ExporterUser3ParserMixin:
                 "experimental RSZ header layout detected: "
                 f"{document['rsz_header_layout_id']}"
             )
+        layout_issues = document.get("layout_issues", ())
+        for issue in layout_issues:
+            warnings.append(f"{issue.code}: {issue.message}")
+        blocking_issue_codes = sorted(
+            {
+                issue.code
+                for issue in layout_issues
+                if getattr(issue, "blocks_repack", True)
+            }
+        )
+        if blocking_issue_codes:
+            unsupported.append(
+                "unverified layout diagnostics: " + ", ".join(blocking_issue_codes)
+            )
 
         for info in document["instance_infos"]:
             idx = int(info["index"])
@@ -396,6 +420,12 @@ class ExporterUser3ParserMixin:
                     output_mode="repack",
                 )
             instances[str(idx)] = entry
+
+        raw_array_count = self._count_raw_array_payloads(instances)
+        if raw_array_count:
+            warnings.append(
+                f"{raw_array_count} large fixed-width array(s) preserved as raw payloads"
+            )
 
         return {
             "_format": PACK_JSON_FORMAT,
@@ -452,6 +482,18 @@ class ExporterUser3ParserMixin:
             "_unsupported": unsupported,
             "_warnings": warnings,
         }
+
+    @classmethod
+    def _count_raw_array_payloads(cls, value: Any) -> int:
+        """Count compact large-array payloads in a repack document subtree."""
+
+        if isinstance(value, dict):
+            if set(value) == {"_raw_array_count", "_raw_array_hex"}:
+                return 1
+            return sum(cls._count_raw_array_payloads(item) for item in value.values())
+        if isinstance(value, list):
+            return sum(cls._count_raw_array_payloads(item) for item in value)
+        return 0
 
     @staticmethod
     def _format_hex_u32(value: int) -> str:

@@ -45,6 +45,8 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         output_root: str | Path | None = None,
         user_magic: int = USR_MAGIC,
         rsz_magic: int = RSZ_MAGIC,
+        preloaded_typedb: TypeDB | None = None,
+        preloaded_il2cpp_metadata: tuple[dict, dict] | None = None,
     ) -> None:
         """Initialize User3Packer with validated configuration and state.
 
@@ -58,6 +60,10 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
             output_root (str | Path | None): Directory where generated output is written.
             user_magic (int): Expected magic value for the outer .user.3 container header.
             rsz_magic (int): Expected magic value for embedded RSZ blocks.
+            preloaded_typedb (TypeDB | None): Optional schema cache supplied by the
+            high-level converter.
+            preloaded_il2cpp_metadata (tuple[dict, dict] | None): Optional enum tables
+            and context supplied by the high-level converter.
 
         Returns:
             None. The method performs its documented side effect in place and raises on invalid input.
@@ -66,12 +72,13 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
             FileNotFoundError: A required file or directory was missing.
         """
         self.schema_path = self._resolve_schema_path(Path(schema_dir))
-        self.typedb = TypeDB.load(self.schema_path)
+        self.typedb = preloaded_typedb or TypeDB.load(self.schema_path)
         self.il2cpp_dump_path = Path(il2cpp_dump_path) if il2cpp_dump_path else None
         if self.il2cpp_dump_path is not None and not self.il2cpp_dump_path.is_file():
             raise FileNotFoundError(
                 f"il2cpp_dump.json not found: {self.il2cpp_dump_path}"
             )
+        self._preloaded_il2cpp_metadata = preloaded_il2cpp_metadata
         self.output_root = Path(output_root) if output_root else Path.cwd()
         self.user_magic = int(user_magic)
         self.rsz_magic = int(rsz_magic)
@@ -298,10 +305,16 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
             dict[str, dict[int, tuple[str, int]]]: Enum lookup table keyed by type name and numeric value.
         """
         raw: dict[str, Any] | None = None
-        if self.il2cpp_dump_path is not None:
+        preloaded = self._preloaded_il2cpp_metadata
+        if preloaded is not None:
+            raw, enum_context = preloaded
+        elif self.il2cpp_dump_path is not None:
             raw, enum_context = User3Exporter.export_il2cpp_metadata_from_path(
                 self.il2cpp_dump_path
             )
+        else:
+            enum_context = {}
+        if isinstance(raw, dict):
             enum_underlying_types = enum_context.get("enum_underlying_types")
             if isinstance(enum_underlying_types, dict):
                 for enum_name, storage_type in enum_underlying_types.items():

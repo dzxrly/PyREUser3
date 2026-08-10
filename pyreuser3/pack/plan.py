@@ -13,6 +13,7 @@ from .models import (
     InstanceRef,
     InstanceSpec,
     PackError,
+    RawArrayValue,
     RszUserdataSpec,
     StructValue,
     UsrResourceSpec,
@@ -519,6 +520,11 @@ class PackerPlanMixin:
                     raise PackError(
                         f"{path} has ref_instance_id plus ignored keys: {extra}"
                     )
+                # Some modern RE Engine data uses -1 as an explicit null Object
+                # reference. Preserve that signed sentinel exactly; all other
+                # non-table ids remain invalid.
+                if ref_id == -1:
+                    return
                 if ref_id not in known_ids:
                     raise PackError(f"{path} references missing instance: {ref_id}")
                 return
@@ -782,6 +788,32 @@ class PackerPlanMixin:
                 raise PackError(str(exc)) from exc
 
         if field_def.is_array:
+            if isinstance(raw_value, dict) and (
+                "_raw_array_count" in raw_value or "_raw_array_hex" in raw_value
+            ):
+                expected_keys = {"_raw_array_count", "_raw_array_hex"}
+                if set(raw_value) != expected_keys:
+                    raise PackError(
+                        f"raw array {field_def.name!r} must contain exactly "
+                        f"{sorted(expected_keys)}"
+                    )
+                count = raw_value.get("_raw_array_count")
+                payload_hex = raw_value.get("_raw_array_hex")
+                if not isinstance(count, int) or count < 0:
+                    raise PackError(
+                        f"raw array {field_def.name!r} count must be non-negative"
+                    )
+                if not isinstance(payload_hex, str):
+                    raise PackError(
+                        f"raw array {field_def.name!r} payload must be hexadecimal text"
+                    )
+                try:
+                    payload = bytes.fromhex(payload_hex)
+                except ValueError as exc:
+                    raise PackError(
+                        f"raw array {field_def.name!r} payload is not valid hexadecimal"
+                    ) from exc
+                return RawArrayValue(count=count, payload=payload)
             items = raw_value if isinstance(raw_value, list) else []
             non_array = FieldDef(
                 name=field_def.name,

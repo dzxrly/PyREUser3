@@ -9,7 +9,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import Any
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 __all__ = [
     "__version__",
@@ -18,9 +18,12 @@ __all__ = [
     "FieldDef",
     "PackError",
     "ParseError",
+    "LayoutValidationIssue",
     "TypeDB",
     "REUser3Converter",
     "RSZ_MAGIC",
+    "probe_usr_file",
+    "probe_usr_path",
     "User3Exporter",
     "User3Packer",
     "USR_MAGIC",
@@ -31,6 +34,9 @@ _EXPORT_MODULES = {
     "ParseError": ".core",
     "RSZ_MAGIC": ".core",
     "USR_MAGIC": ".core",
+    "LayoutValidationIssue": ".usr_container",
+    "probe_usr_file": ".usr_container",
+    "probe_usr_path": ".usr_container",
     "ClassDef": ".schema",
     "FieldDef": ".schema",
     "TypeDB": ".schema",

@@ -22,6 +22,32 @@ EXPERIMENTAL = "experimental"
 
 
 @dataclass(frozen=True)
+class AlignmentRule:
+    """Describe how a section-relative offset is aligned in the physical file."""
+
+    alignment: int
+    origin: str
+
+    def absolute_position(self, relative_offset: int, section_start: int) -> int:
+        """Return the position whose alignment is constrained by this rule."""
+
+        if self.origin == "file":
+            return section_start + relative_offset
+        if self.origin == "rsz":
+            return relative_offset
+        raise ValueError(f"unsupported alignment origin: {self.origin}")
+
+    def is_aligned(self, relative_offset: int, section_start: int) -> bool:
+        """Return whether an offset satisfies this rule."""
+
+        if self.alignment <= 0:
+            raise ValueError("alignment must be positive")
+        return (
+            self.absolute_position(relative_offset, section_start) % self.alignment == 0
+        )
+
+
+@dataclass(frozen=True)
 class UsrLayoutCandidate:
     """Describe one independently detectable outer USR byte layout."""
 
@@ -108,6 +134,24 @@ class RszHeaderLayout:
     def rsz_userdata_entry_size(self) -> int:
         return struct.calcsize(self.rsz_userdata_entry_struct)
 
+    @property
+    def userdata_alignment_rule(self) -> AlignmentRule:
+        """Return the RSZ userdata table alignment rule."""
+
+        return AlignmentRule(
+            self.rsz_userdata_alignment,
+            self.rsz_userdata_alignment_base,
+        )
+
+    @property
+    def data_alignment_rule(self) -> AlignmentRule:
+        """Return the RSZ instance-data alignment rule."""
+
+        return AlignmentRule(
+            self.rsz_data_alignment,
+            self.rsz_data_alignment_base,
+        )
+
 
 _COMMON_USR_FIELDS = (
     "signature",
@@ -129,6 +173,7 @@ _RECENT_RE_GAMES = (
     "Kunitsu-Gami",
     "Dead Rising Deluxe Remaster",
     "Monster Hunter Wilds",
+    "Monster Hunter Stories 3: Twisted Reflection",
 )
 
 
@@ -213,7 +258,9 @@ RSZ_V4_PLUS = RszHeaderLayout(
     evidence=(
         "RE_RSZ uses the userdata-bearing RSZ header for modern games",
         "REasy selects this 0x30-byte header for version >= 4",
-        "verified with Monster Hunter Wilds RSZ version 16",
+        "REasy aligns standard RSZ userdata and instance data in the full file",
+        "verified against 62,768 Monster Hunter Wilds RSZ version 16 files",
+        "verified against 42,945 Monster Hunter Stories 3 RSZ version 16 files",
     ),
     known_games=_RECENT_RE_GAMES,
     version_min=4,
@@ -232,8 +279,8 @@ RSZ_V4_PLUS = RszHeaderLayout(
     ),
     instance_entry_struct="<II",
     instance_entry_fields=("type_hash", "crc"),
-    rsz_userdata_alignment=8,
-    rsz_userdata_alignment_base="rsz",
+    rsz_userdata_alignment=0x10,
+    rsz_userdata_alignment_base="file",
     rsz_userdata_entry_struct="<iIQ",
     rsz_userdata_entry_fields=("instance_id", "type_hash", "path_offset"),
     rsz_userdata_path_offset_base="rsz",

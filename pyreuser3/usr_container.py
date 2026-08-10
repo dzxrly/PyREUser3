@@ -3,16 +3,50 @@
 from __future__ import annotations
 
 import struct
+from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal, cast
 
-from .core import ParseError
+from .core import ParseError, RSZ_MAGIC, USR_MAGIC
 from .usr_layouts import (
     RSZ_HEADER_LAYOUTS,
     USR_LAYOUTS,
     RszHeaderLayout,
     UsrLayoutCandidate,
 )
+
+
+LayoutDetectionPolicy = Literal["safe_read", "verified_repack", "strict_probe"]
+LAYOUT_DETECTION_POLICIES = frozenset(
+    {"safe_read", "verified_repack", "strict_probe"}
+)
+
+
+@dataclass(frozen=True)
+class LayoutValidationIssue:
+    """Describe a non-fatal physical-layout deviation found while parsing."""
+
+    code: str
+    message: str
+    field: str
+    observed: int | str
+    expected: int | str
+    severity: str = "warning"
+    blocks_repack: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible diagnostic object."""
+
+        return {
+            "code": self.code,
+            "severity": self.severity,
+            "message": self.message,
+            "field": self.field,
+            "observed": self.observed,
+            "expected": self.expected,
+            "blocks_repack": self.blocks_repack,
+        }
 
 
 @dataclass(frozen=True)
@@ -37,6 +71,43 @@ class DetectedUsrContainer:
     resources: tuple[UsrResourceInfo, ...]
     userdata: tuple[UsrUserdataInfo, ...]
     rsz_header: dict[str, int]
+    issues: tuple[LayoutValidationIssue, ...] = ()
+
+
+def _normalize_policy(policy: str) -> LayoutDetectionPolicy:
+    normalized = str(policy).strip().lower().replace("-", "_")
+    if normalized not in LAYOUT_DETECTION_POLICIES:
+        raise ValueError(
+            "layout detection policy must be safe_read, verified_repack, or strict_probe"
+        )
+    return cast(LayoutDetectionPolicy, normalized)
+
+
+def _report_advisory(
+    issues: list[LayoutValidationIssue],
+    policy: LayoutDetectionPolicy,
+    *,
+    code: str,
+    message: str,
+    field: str,
+    observed: int | str,
+    expected: int | str,
+    blocks_repack: bool = True,
+) -> None:
+    """Raise in strict mode or preserve a structured warning in read modes."""
+
+    if policy == "strict_probe":
+        raise ValueError(message)
+    issues.append(
+        LayoutValidationIssue(
+            code=code,
+            message=message,
+            field=field,
+            observed=observed,
+            expected=expected,
+            blocks_repack=blocks_repack,
+        )
+    )
 
 
 def _unpack_named(
@@ -86,7 +157,10 @@ def _try_layout(
     rsz_layout: RszHeaderLayout,
     user_magic: int,
     rsz_magic: int,
+    policy: LayoutDetectionPolicy | str = "strict_probe",
 ) -> DetectedUsrContainer:
+    policy = _normalize_policy(policy)
+    issues: list[LayoutValidationIssue] = []
     if layout.header_padding_size < 0:
         raise ValueError("declared USR header is smaller than its semantic structure")
     if len(data) < layout.header_size:
@@ -137,9 +211,25 @@ def _try_layout(
     if header["userdata_info_tbl"] < layout.header_size:
         raise ValueError("userdata table starts inside the USR header")
     if header["resource_info_tbl"] % layout.table_alignment:
-        raise ValueError("resource table does not meet the candidate alignment")
+        _report_advisory(
+            issues,
+            policy,
+            code="USR_RESOURCE_TABLE_ALIGNMENT",
+            message="resource table does not meet the candidate alignment",
+            field="resource_info_tbl",
+            observed=header["resource_info_tbl"],
+            expected=f"absolute multiple of {layout.table_alignment}",
+        )
     if header["userdata_info_tbl"] % layout.table_alignment:
-        raise ValueError("userdata table does not meet the candidate alignment")
+        _report_advisory(
+            issues,
+            policy,
+            code="USR_USERDATA_TABLE_ALIGNMENT",
+            message="userdata table does not meet the candidate alignment",
+            field="userdata_info_tbl",
+            observed=header["userdata_info_tbl"],
+            expected=f"absolute multiple of {layout.table_alignment}",
+        )
     if header["resource_count"] and header["userdata_count"]:
         resource_range = (header["resource_info_tbl"], resource_end)
         userdata_range = (header["userdata_info_tbl"], userdata_end)
@@ -221,13 +311,20 @@ def _try_layout(
         raise ValueError("RSZ instance table exceeds the data boundary")
     if data_offset < rsz_layout.header_size or rsz_start + data_offset > len(data):
         raise ValueError("RSZ data offset is outside the file")
-    if rsz_layout.rsz_data_alignment_base == "file":
-        if (rsz_start + data_offset) % rsz_layout.rsz_data_alignment:
-            raise ValueError("RSZ data is not aligned to the absolute file position")
-    else:
-        raise ValueError(
-            f"unsupported RSZ data alignment base: "
-            f"{rsz_layout.rsz_data_alignment_base}"
+    data_alignment = rsz_layout.data_alignment_rule
+    if not data_alignment.is_aligned(data_offset, rsz_start):
+        data_position = data_alignment.absolute_position(data_offset, rsz_start)
+        _report_advisory(
+            issues,
+            policy,
+            code="RSZ_DATA_ALIGNMENT",
+            message="RSZ data does not meet the candidate alignment",
+            field="data_offset",
+            observed=data_position,
+            expected=(
+                f"{data_alignment.origin}-relative multiple of "
+                f"{data_alignment.alignment}"
+            ),
         )
 
     if rsz_header["userdata_count"]:
@@ -238,17 +335,23 @@ def _try_layout(
         )
         if userdata_offset < instance_end or rsz_userdata_end > data_offset:
             raise ValueError("RSZ userdata table exceeds its section")
-        if rsz_layout.rsz_userdata_alignment_base == "rsz":
-            userdata_position = userdata_offset
-        elif rsz_layout.rsz_userdata_alignment_base == "file":
-            userdata_position = rsz_start + userdata_offset
-        else:
-            raise ValueError(
-                "unsupported RSZ userdata alignment base: "
-                f"{rsz_layout.rsz_userdata_alignment_base}"
+        userdata_alignment = rsz_layout.userdata_alignment_rule
+        if not userdata_alignment.is_aligned(userdata_offset, rsz_start):
+            userdata_position = userdata_alignment.absolute_position(
+                userdata_offset, rsz_start
             )
-        if userdata_position % rsz_layout.rsz_userdata_alignment:
-            raise ValueError("RSZ userdata table does not meet candidate alignment")
+            _report_advisory(
+                issues,
+                policy,
+                code="RSZ_USERDATA_ALIGNMENT",
+                message="RSZ userdata table does not meet candidate alignment",
+                field="userdata_offset",
+                observed=userdata_position,
+                expected=(
+                    f"{userdata_alignment.origin}-relative multiple of "
+                    f"{userdata_alignment.alignment}"
+                ),
+            )
         for index in range(rsz_header["userdata_count"]):
             offset = (
                 rsz_start
@@ -286,7 +389,15 @@ def _try_layout(
                 raise ValueError(f"RSZ userdata {index} path is outside its string pool")
             _read_utf16z(data, rsz_start + path_offset, rsz_start + data_offset)
     elif userdata_offset != data_offset:
-        raise ValueError("empty RSZ userdata offset does not match data offset")
+        _report_advisory(
+            issues,
+            policy,
+            code="RSZ_EMPTY_USERDATA_OFFSET",
+            message="empty RSZ userdata offset does not match data offset",
+            field="userdata_offset",
+            observed=userdata_offset,
+            expected=data_offset,
+        )
 
     padding_start = layout.semantic_header_size
     header_padding = data[padding_start : layout.header_size]
@@ -298,22 +409,58 @@ def _try_layout(
         resources=tuple(resources),
         userdata=tuple(userdata),
         rsz_header=rsz_header,
+        issues=tuple(issues),
     )
 
 
 def detect_usr_layout(
-    data: bytes, user_magic: int, rsz_magic: int
+    data: bytes,
+    user_magic: int,
+    rsz_magic: int,
+    policy: LayoutDetectionPolicy | str = "strict_probe",
 ) -> DetectedUsrContainer:
-    """Select exactly one candidate after complete structural validation."""
+    """Select exactly one candidate after staged structural validation."""
 
+    policy = _normalize_policy(policy)
     matches: list[DetectedUsrContainer] = []
     failures: list[str] = []
     for layout in USR_LAYOUTS:
         if not layout.read_supported:
             continue
-        for rsz_layout in RSZ_HEADER_LAYOUTS:
-            if not rsz_layout.read_supported:
-                continue
+        try:
+            header = _unpack_named(data, 0, layout.header_struct, layout.header_fields)
+            if header["signature"] != user_magic:
+                raise ValueError(
+                    f"USR magic mismatch: 0x{header['signature']:08x}"
+                )
+            rsz_start = header["data_offset"]
+            rsz_prefix = _unpack_named(
+                data,
+                rsz_start,
+                "<II",
+                ("magic", "version"),
+            )
+            if rsz_prefix["magic"] != rsz_magic:
+                raise ValueError(
+                    f"RSZ magic mismatch: 0x{rsz_prefix['magic']:08x}"
+                )
+        except (KeyError, struct.error, ValueError) as exc:
+            failures.append(f"{layout.identifier}: {exc}")
+            continue
+
+        compatible_rsz_layouts = [
+            candidate
+            for candidate in RSZ_HEADER_LAYOUTS
+            if candidate.read_supported
+            and candidate.supports_version(rsz_prefix["version"])
+        ]
+        if not compatible_rsz_layouts:
+            failures.append(
+                f"{layout.identifier}: no RSZ header layout supports version "
+                f"{rsz_prefix['version']}"
+            )
+            continue
+        for rsz_layout in compatible_rsz_layouts:
             candidate_id = f"{layout.identifier}+{rsz_layout.identifier}"
             try:
                 matches.append(
@@ -323,6 +470,7 @@ def detect_usr_layout(
                         rsz_layout,
                         user_magic,
                         rsz_magic,
+                        policy=policy,
                     )
                 )
             except (KeyError, struct.error, ValueError) as exc:
@@ -337,3 +485,135 @@ def detect_usr_layout(
         raise ParseError(f"ambiguous USR layout candidates: {identifiers}")
     detail = "; ".join(failures) if failures else "no candidates registered"
     raise ParseError(f"unsupported USR layout: {detail}")
+
+
+def _probe_result(
+    detected: DetectedUsrContainer,
+    *,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """Convert a detected container to a compact JSON-compatible report."""
+
+    rsz_start = detected.header["data_offset"]
+    userdata_offset = detected.rsz_header["userdata_offset"]
+    data_offset = detected.rsz_header["data_offset"]
+    result: dict[str, Any] = {
+        "ok": True,
+        "layout": {
+            "usr": detected.layout.identifier,
+            "usr_status": detected.layout.status,
+            "rsz_header": detected.rsz_layout.identifier,
+            "rsz_status": detected.rsz_layout.status,
+            "rsz_version": detected.rsz_header["version"],
+        },
+        "counts": {
+            "resources": detected.header["resource_count"],
+            "usr_userdata": detected.header["userdata_count"],
+            "objects": detected.rsz_header["object_count"],
+            "instances": detected.rsz_header["instance_count"],
+            "rsz_userdata": detected.rsz_header["userdata_count"],
+        },
+        "offsets": {
+            "rsz_start": rsz_start,
+            "rsz_userdata": rsz_start + userdata_offset,
+            "rsz_data": rsz_start + data_offset,
+        },
+        "issues": [issue.to_dict() for issue in detected.issues],
+    }
+    if source is not None:
+        result["file"] = source
+    return result
+
+
+def probe_usr_file(
+    path: str | Path,
+    *,
+    user_magic: int = USR_MAGIC,
+    rsz_magic: int = RSZ_MAGIC,
+    policy: LayoutDetectionPolicy | str = "safe_read",
+) -> dict[str, Any]:
+    """Inspect one .user.3 container without requiring a schema or il2cpp dump."""
+
+    source = Path(path)
+    detected = detect_usr_layout(
+        source.read_bytes(),
+        user_magic,
+        rsz_magic,
+        policy=policy,
+    )
+    return _probe_result(detected, source=str(source))
+
+
+def probe_usr_path(
+    root: str | Path,
+    *,
+    user_magic: int = USR_MAGIC,
+    rsz_magic: int = RSZ_MAGIC,
+    policy: LayoutDetectionPolicy | str = "safe_read",
+    include_successes: bool = False,
+) -> dict[str, Any]:
+    """Inspect one file or a directory tree and return aggregate diagnostics."""
+
+    policy = _normalize_policy(policy)
+    source_root = Path(root)
+    if source_root.is_file():
+        files = [source_root]
+    elif source_root.is_dir():
+        files = sorted(source_root.rglob("*.user.3"))
+    else:
+        raise FileNotFoundError(f"probe input not found: {source_root}")
+    if not files:
+        raise FileNotFoundError(f"no *.user.3 found under: {source_root}")
+
+    layouts: Counter[str] = Counter()
+    versions: Counter[str] = Counter()
+    issue_codes: Counter[str] = Counter()
+    records: list[dict[str, Any]] = []
+    success = failed = warned = 0
+    for path in files:
+        label = (
+            path.name
+            if source_root.is_file()
+            else path.relative_to(source_root).as_posix()
+        )
+        try:
+            detected = detect_usr_layout(
+                path.read_bytes(),
+                user_magic,
+                rsz_magic,
+                policy=policy,
+            )
+            success += 1
+            layout_key = (
+                f"{detected.layout.identifier}+{detected.rsz_layout.identifier}"
+            )
+            layouts[layout_key] += 1
+            versions[str(detected.rsz_header["version"])] += 1
+            for issue in detected.issues:
+                issue_codes[issue.code] += 1
+            if detected.issues:
+                warned += 1
+            if include_successes or detected.issues:
+                records.append(_probe_result(detected, source=label))
+        except Exception as exc:
+            failed += 1
+            records.append(
+                {
+                    "ok": False,
+                    "file": label,
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                }
+            )
+
+    return {
+        "root": str(source_root),
+        "policy": policy,
+        "total": len(files),
+        "success": success,
+        "failed": failed,
+        "warned": warned,
+        "layouts": dict(sorted(layouts.items())),
+        "rsz_versions": dict(sorted(versions.items())),
+        "issue_codes": dict(sorted(issue_codes.items())),
+        "files": records,
+    }

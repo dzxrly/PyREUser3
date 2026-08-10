@@ -1,9 +1,11 @@
 import struct
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
-from pyreuser3.core import PACK_JSON_FORMAT, RSZ_MAGIC, USR_MAGIC
+from pyreuser3.core import PACK_JSON_FORMAT, ParseError, RSZ_MAGIC, USR_MAGIC
 from pyreuser3.export.fields import ExporterFieldParserMixin
 from pyreuser3.export.postprocess import ExporterPostprocessMixin
 from pyreuser3.export.tree import ExporterTreeMixin
@@ -12,12 +14,18 @@ from pyreuser3.pack.models import PackError
 from pyreuser3.pack.plan import PackerPlanMixin
 from pyreuser3.pack.writer import PackerWriterMixin
 from pyreuser3.schema import ClassDef, FieldDef, TypeDB
-from pyreuser3.usr_container import detect_usr_layout
+from pyreuser3.usr_container import (
+    _try_layout,
+    detect_usr_layout,
+    probe_usr_file,
+    probe_usr_path,
+)
 from pyreuser3.usr_layouts import (
     DEFAULT_RSZ_HEADER_LAYOUT_ID,
     DEFAULT_USR_LAYOUT_ID,
     RSZ_V3_LEGACY,
     RSZ_V4_PLUS,
+    USR_H30_ABSOLUTE_UTF16Z,
     USR_H28_ABSOLUTE_UTF16Z_EXPERIMENTAL,
 )
 
@@ -214,6 +222,11 @@ class UsrContainerTests(unittest.TestCase):
         self.assertEqual(detected.header["userdata_count"], 1)
         self.assertEqual(detected.rsz_header["userdata_count"], 1)
         self.assertEqual(detected.userdata[0].path, path)
+        absolute_userdata = (
+            detected.header["data_offset"]
+            + detected.rsz_header["userdata_offset"]
+        )
+        self.assertEqual(absolute_userdata % 16, 0)
 
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "userdata.user.3"
@@ -223,6 +236,271 @@ class UsrContainerTests(unittest.TestCase):
 
         self.assertEqual(repack["_unsupported"], [])
         self.assertEqual(self.packer.pack(repack), binary)
+
+    def test_modern_userdata_uses_absolute_file_alignment_for_every_rsz_start_mod(self):
+        observed_rsz_start_mods = set()
+        for suffix_length in range(16):
+            path = "GameDesign/Test/External" + ("x" * suffix_length) + ".user"
+            document = make_repack_document(
+                instances={
+                    "0": {
+                        "_class": None,
+                        "_kind": "null",
+                        "_hash": "0x00000000",
+                        "_crc": "0x00000000",
+                    },
+                    "1": {
+                        "_class": "Unknown Class",
+                        "_kind": "userdata_reference",
+                        "_hash": "0x0a32d148",
+                        "_crc": "0x00000000",
+                        "path": path,
+                    },
+                },
+                roots=[1],
+                usr_userdata=[
+                    {
+                        "class_hash": "0x0a32d148",
+                        "crc": "0x00000000",
+                        "path": path,
+                    }
+                ],
+                rsz_userdata=[
+                    {
+                        "instance_id": 1,
+                        "type_hash": "0x0a32d148",
+                        "path": path,
+                    }
+                ],
+            )
+
+            binary = self.packer.pack(document)
+            detected = detect_usr_layout(binary, USR_MAGIC, RSZ_MAGIC)
+            rsz_start = detected.header["data_offset"]
+            observed_rsz_start_mods.add(rsz_start % 16)
+            absolute_userdata = rsz_start + detected.rsz_header["userdata_offset"]
+            absolute_data = rsz_start + detected.rsz_header["data_offset"]
+            self.assertEqual(absolute_userdata % 16, 0)
+            self.assertEqual(absolute_data % 16, 0)
+
+        self.assertEqual(observed_rsz_start_mods, set(range(0, 16, 2)))
+
+    def test_safe_read_records_alignment_issue_while_strict_probe_rejects_it(self):
+        path = "GameDesign/Test/External.user"
+        document = make_repack_document(
+            instances={
+                "0": {
+                    "_class": None,
+                    "_kind": "null",
+                    "_hash": "0x00000000",
+                    "_crc": "0x00000000",
+                },
+                "1": {
+                    "_class": "Unknown Class",
+                    "_kind": "userdata_reference",
+                    "_hash": "0x0a32d148",
+                    "_crc": "0x00000000",
+                    "path": path,
+                },
+            },
+            roots=[1],
+            usr_userdata=[
+                {
+                    "class_hash": "0x0a32d148",
+                    "crc": "0x00000000",
+                    "path": path,
+                }
+            ],
+            rsz_userdata=[
+                {
+                    "instance_id": 1,
+                    "type_hash": "0x0a32d148",
+                    "path": path,
+                }
+            ],
+        )
+        binary = self.packer.pack(document)
+        relative_candidate = replace(
+            RSZ_V4_PLUS,
+            rsz_userdata_alignment=16,
+            rsz_userdata_alignment_base="rsz",
+        )
+
+        detected = _try_layout(
+            binary,
+            USR_H30_ABSOLUTE_UTF16Z,
+            relative_candidate,
+            USR_MAGIC,
+            RSZ_MAGIC,
+            policy="safe_read",
+        )
+        self.assertEqual(
+            [issue.code for issue in detected.issues],
+            ["RSZ_USERDATA_ALIGNMENT"],
+        )
+        with self.assertRaisesRegex(ValueError, "userdata table"):
+            _try_layout(
+                binary,
+                USR_H30_ABSOLUTE_UTF16Z,
+                relative_candidate,
+                USR_MAGIC,
+                RSZ_MAGIC,
+                policy="strict_probe",
+            )
+
+    def test_repack_export_blocks_a_layout_with_advisory_diagnostics(self):
+        path = "GameDesign/Test/External.user"
+        document = make_repack_document(
+            instances={
+                "0": {
+                    "_class": None,
+                    "_kind": "null",
+                    "_hash": "0x00000000",
+                    "_crc": "0x00000000",
+                },
+                "1": {
+                    "_class": "Unknown Class",
+                    "_kind": "userdata_reference",
+                    "_hash": "0x0a32d148",
+                    "_crc": "0x00000000",
+                    "path": path,
+                },
+            },
+            roots=[1],
+            usr_userdata=[
+                {
+                    "class_hash": "0x0a32d148",
+                    "crc": "0x00000000",
+                    "path": path,
+                }
+            ],
+            rsz_userdata=[
+                {
+                    "instance_id": 1,
+                    "type_hash": "0x0a32d148",
+                    "path": path,
+                }
+            ],
+        )
+        binary = self.packer.pack(document)
+        relative_candidate = replace(
+            RSZ_V4_PLUS,
+            rsz_userdata_alignment=16,
+            rsz_userdata_alignment_base="rsz",
+        )
+
+        def detect_with_unverified_rule(raw_data, user_magic, rsz_magic, *, policy):
+            return _try_layout(
+                raw_data,
+                USR_H30_ABSOLUTE_UTF16Z,
+                relative_candidate,
+                user_magic,
+                rsz_magic,
+                policy=policy,
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "advisory.user.3"
+            source.write_bytes(binary)
+            exporter = ContainerExporter(TypeDB({}), Path(temp) / "schema.json")
+            exporter.json_format = "repack"
+            with patch(
+                "pyreuser3.export.user3.detect_usr_layout",
+                side_effect=detect_with_unverified_rule,
+            ):
+                repack = exporter._parse_user3_pack(source)
+
+        self.assertIn(
+            "RSZ_USERDATA_ALIGNMENT",
+            " ".join(repack["_warnings"]),
+        )
+        self.assertIn(
+            "unverified layout diagnostics: RSZ_USERDATA_ALIGNMENT",
+            repack["_unsupported"],
+        )
+        with self.assertRaisesRegex(PackError, "writer cannot rebuild"):
+            self.packer.pack(repack)
+
+    def test_safe_read_still_rejects_structural_userdata_corruption(self):
+        path = "GameDesign/Test/External.user"
+        document = make_repack_document(
+            instances={
+                "0": {
+                    "_class": None,
+                    "_kind": "null",
+                    "_hash": "0x00000000",
+                    "_crc": "0x00000000",
+                },
+                "1": {
+                    "_class": "Unknown Class",
+                    "_kind": "userdata_reference",
+                    "_hash": "0x0a32d148",
+                    "_crc": "0x00000000",
+                    "path": path,
+                },
+            },
+            roots=[1],
+            usr_userdata=[
+                {
+                    "class_hash": "0x0a32d148",
+                    "crc": "0x00000000",
+                    "path": path,
+                }
+            ],
+            rsz_userdata=[
+                {
+                    "instance_id": 1,
+                    "type_hash": "0x0a32d148",
+                    "path": path,
+                }
+            ],
+        )
+        binary = self.packer.pack(document)
+        detected = detect_usr_layout(binary, USR_MAGIC, RSZ_MAGIC)
+        type_hash_offset = (
+            detected.header["data_offset"]
+            + detected.rsz_header["userdata_offset"]
+            + 4
+        )
+        corrupted = bytearray(binary)
+        original_hash = struct.unpack_from("<I", corrupted, type_hash_offset)[0]
+        struct.pack_into("<I", corrupted, type_hash_offset, original_hash ^ 1)
+
+        with self.assertRaisesRegex(
+            ParseError,
+            "type hash does not match instance info",
+        ):
+            detect_usr_layout(
+                bytes(corrupted),
+                USR_MAGIC,
+                RSZ_MAGIC,
+                policy="safe_read",
+            )
+
+    def test_probe_file_and_directory_do_not_require_schema(self):
+        document = make_repack_document(
+            instances={
+                "0": {
+                    "_class": None,
+                    "_kind": "null",
+                    "_hash": "0x00000000",
+                    "_crc": "0x00000000",
+                }
+            },
+            roots=[],
+        )
+        binary = self.packer.pack(document)
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "probe.user.3"
+            source.write_bytes(binary)
+            single = probe_usr_file(source)
+            batch = probe_usr_path(temp, policy="strict_probe")
+
+        self.assertTrue(single["ok"])
+        self.assertEqual(single["layout"]["rsz_version"], 16)
+        self.assertEqual(batch["total"], 1)
+        self.assertEqual(batch["success"], 1)
+        self.assertEqual(batch["failed"], 0)
 
     def test_modern_rsz_version_is_detected_and_preserved_instead_of_forced_to_16(self):
         for version in (4, 12, 16):
@@ -371,6 +649,131 @@ class UsrContainerTests(unittest.TestCase):
             PackError, "packing requires repack JSON; readable JSON is read-only"
         ):
             self.packer.pack([{TEST_CLASS_NAME: {"dependency": "A/B/C.gpbf"}}])
+
+    def test_negative_one_object_reference_null_sentinel_round_trips(self):
+        class_hash = 0x2468ACE0
+        class_crc = 0x13579BDF
+        class_name = "app.NegativeNullReference"
+        typedb = TypeDB(
+            {
+                class_hash: ClassDef(
+                    name=class_name,
+                    crc=class_crc,
+                    fields=[
+                        FieldDef(
+                            name="target",
+                            field_type="Object",
+                            original_type="System.Object",
+                            size=4,
+                            align=4,
+                            is_array=False,
+                        )
+                    ],
+                )
+            }
+        )
+        packer = ContainerPacker(typedb)
+        document = make_repack_document(
+            instances={
+                "0": {
+                    "_class": None,
+                    "_kind": "null",
+                    "_hash": "0x00000000",
+                    "_crc": "0x00000000",
+                },
+                "1": {
+                    "_class": class_name,
+                    "_hash": f"0x{class_hash:08x}",
+                    "_crc": f"0x{class_crc:08x}",
+                    "fields": {"target": {"ref_instance_id": -1}},
+                },
+            },
+            roots=[1],
+        )
+
+        binary = packer.pack(document)
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "negative-null.user.3"
+            source.write_bytes(binary)
+            exporter = ContainerExporter(typedb, Path(temp) / "schema.json")
+            exporter.json_format = "repack"
+            repack = exporter._parse_user3_pack(source)
+
+        self.assertEqual(
+            repack["_instances"]["1"]["fields"]["target"],
+            {"ref_instance_id": -1},
+        )
+        self.assertEqual(packer.pack(repack), binary)
+        invalid = {**repack}
+        invalid["_instances"] = {
+            **repack["_instances"],
+            "1": {
+                **repack["_instances"]["1"],
+                "fields": {"target": {"ref_instance_id": -2}},
+            },
+        }
+        with self.assertRaisesRegex(PackError, "missing instance: -2"):
+            packer.pack(invalid)
+
+    def test_large_fixed_array_uses_lossless_raw_representation(self):
+        class_hash = 0x10293847
+        class_crc = 0x56473829
+        class_name = "app.LargeFixedArray"
+        typedb = TypeDB(
+            {
+                class_hash: ClassDef(
+                    name=class_name,
+                    crc=class_crc,
+                    fields=[
+                        FieldDef(
+                            name="values",
+                            field_type="U32",
+                            original_type="System.UInt32",
+                            size=4,
+                            align=4,
+                            is_array=True,
+                        )
+                    ],
+                )
+            }
+        )
+        packer = ContainerPacker(typedb)
+        document = make_repack_document(
+            instances={
+                "0": {
+                    "_class": None,
+                    "_kind": "null",
+                    "_hash": "0x00000000",
+                    "_crc": "0x00000000",
+                },
+                "1": {
+                    "_class": class_name,
+                    "_hash": f"0x{class_hash:08x}",
+                    "_crc": f"0x{class_crc:08x}",
+                    "fields": {"values": [1, 2, 3, 4]},
+                },
+            },
+            roots=[1],
+        )
+        binary = packer.pack(document)
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "large-array.user.3"
+            source.write_bytes(binary)
+            exporter = ContainerExporter(typedb, Path(temp) / "schema.json")
+            exporter.json_format = "repack"
+            with patch("pyreuser3.export.fields.LARGE_ARRAY_RAW_THRESHOLD", 2):
+                repack = exporter._parse_user3_pack(source)
+
+        raw_array = repack["_instances"]["1"]["fields"]["values"]
+        self.assertEqual(raw_array["_raw_array_count"], 4)
+        self.assertEqual(len(bytes.fromhex(raw_array["_raw_array_hex"])), 16)
+        self.assertIn("large fixed-width array", " ".join(repack["_warnings"]))
+        self.assertEqual(packer.pack(repack), binary)
+
+        raw_array["_raw_array_count"] = 5
+        with self.assertRaisesRegex(PackError, "16 bytes, expected 20"):
+            packer.pack(repack)
 
 
 if __name__ == "__main__":

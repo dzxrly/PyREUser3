@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Sequence
 
 from . import __version__
@@ -189,6 +190,35 @@ def build_parser() -> argparse.ArgumentParser:
     add_magic_args(pack_parser)
     pack_parser.set_defaults(func=run_pack)
 
+    probe_parser = subparsers.add_parser(
+        "probe",
+        help="Inspect .user.3 container layouts without schema files.",
+    )
+    probe_parser.add_argument(
+        "--input-dir",
+        "-i",
+        required=True,
+        help="Root directory or single .user.3 file to inspect.",
+    )
+    probe_parser.add_argument(
+        "--json-report",
+        "-o",
+        default="",
+        help="Optional JSON report destination; otherwise print the report.",
+    )
+    probe_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Treat advisory layout deviations as failures.",
+    )
+    probe_parser.add_argument(
+        "--include-successes",
+        action="store_true",
+        help="Include a per-file record for successful files.",
+    )
+    add_magic_args(probe_parser)
+    probe_parser.set_defaults(func=run_probe)
+
     return parser
 
 
@@ -249,6 +279,28 @@ def run_pack(args: argparse.Namespace) -> int:
         exclude_regexes=args.exclude_regex,
     )
     console.log("Pack complete:", json.dumps(result, ensure_ascii=False))
+    return 1 if result.get("failed", 0) else 0
+
+
+def run_probe(args: argparse.Namespace) -> int:
+    """Run schema-free USR/RSZ layout inspection."""
+
+    from .usr_container import probe_usr_path
+
+    result = probe_usr_path(
+        args.input_dir,
+        user_magic=args.user_magic,
+        rsz_magic=args.rsz_magic,
+        policy="strict_probe" if args.strict else "safe_read",
+        include_successes=args.include_successes,
+    )
+    payload = json.dumps(result, ensure_ascii=False, indent=2)
+    if args.json_report:
+        target = Path(args.json_report)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(payload + "\n", encoding="utf-8")
+    else:
+        print(payload)
     return 1 if result.get("failed", 0) else 0
 
 

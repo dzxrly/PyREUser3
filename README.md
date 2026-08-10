@@ -31,6 +31,7 @@ from pyreuser3 import REUser3Converter
 - `JSON -> .user.3` packing.
 - A reusable Python API through `REUser3Converter`.
 - CLI commands through `pyreuser3`.
+- Schema-free layout probing for individual files and whole corpora.
 - A local `.user.3` export Web UI through `pyreuser3-web`.
 
 This PyPI package intentionally does not include game resources, dumped game data, RE_RSZ templates, `il2cpp_dump.json`,
@@ -42,6 +43,9 @@ or repository-specific helper scripts.
 - A RE_RSZ schema JSON file for the target game/version.
 - An `il2cpp_dump.json` file when exporting readable enum labels.
 - One or more unpacked `.user.3` files.
+
+Layout probing is the exception: `pyreuser3 probe` only inspects the USR/RSZ
+container and does not require a schema or `il2cpp_dump.json`.
 
 ## Command Line
 
@@ -75,6 +79,19 @@ pyreuser3 pack \
 ```
 
 The `-p/--il2cpp-dump-path` option is required for export and optional for pack. Passing it during pack is recommended when enum names need to be resolved back to numeric values.
+
+Probe a file or directory without loading game metadata:
+
+```bash
+pyreuser3 probe -i <input-user3-file-or-directory>
+pyreuser3 probe -i <input-user3-file-or-directory> --strict -o layout-report.json
+```
+
+The default probe uses the same safety policy as readable export: structural
+corruption remains fatal, while non-canonical alignment is reported as a warning.
+`--strict` rejects every layout deviation and is intended for corpus validation.
+The optional JSON report contains totals grouped by detected layout, RSZ version,
+and diagnostic code.
 
 Start the local `.user.3` export Web UI:
 
@@ -111,6 +128,29 @@ converter.pack_file(
 )
 ```
 
+`REUser3Converter` loads schema and il2cpp metadata lazily and caches it for the
+lifetime of that converter. Repeated readable, repack, pack, and patch calls no
+longer rescan large metadata files. Cache entries are invalidated automatically
+when the source path, size, or nanosecond modification time changes; callers that
+replace metadata in an unusual way can force a reload with:
+
+```python
+converter.clear_metadata_cache()
+```
+
+`patch_directory()` also reuses one prepared exporter and packer for the complete
+batch instead of constructing them once per file.
+
+Container layout probing is also available without constructing a converter or
+loading a schema:
+
+```python
+from pyreuser3 import probe_usr_file, probe_usr_path
+
+one_file = probe_usr_file("input/example.user.3")
+whole_tree = probe_usr_path("input/natives", policy="strict_probe")
+```
+
 Convert a `.user.3` file to an in-memory JSON-compatible Python object without writing a JSON file:
 
 ```python
@@ -139,10 +179,22 @@ dependency tables. Layout candidates and their read/repack capability status are
 declared in `pyreuser3/usr_layouts.py`; RSZ field definitions still come from the
 supplied REFramework-compatible schema. The verified modern header family accepts
 structurally valid RSZ v4+ files and preserves their original version instead of
-forcing MHWS version 16. Experimental physical H28 and legacy RSZ v3 candidates are
-read-only until real fixtures validate byte-for-byte repacking. V1 and v2 documents
-are recognized for diagnostics but must be re-exported as v3 before packing because
-they do not record the required layout metadata.
+forcing MHWS version 16. For this family, offset values remain relative to the RSZ
+section, but the userdata and data targets are aligned to absolute 16-byte file
+positions. Readable export accepts alignment-only deviations, and the probe API
+reports them as structured warnings. Repack export records the same diagnostics in
+`_warnings` and blocks packing through `_unsupported` until the layout is verified.
+Experimental physical H28 and legacy RSZ v3 candidates are read-only until real
+fixtures validate byte-for-byte repacking. V1 and v2 documents are recognized for
+diagnostics but must be re-exported as v3 before packing because they do not record
+the required layout metadata.
+
+Modern files may use signed `-1` as an explicit null `Object` reference; repack
+preserves that sentinel while continuing to reject every other missing instance
+ID. Fixed-width arrays above one million elements are kept compactly as
+`_raw_array_count` plus `_raw_array_hex`. This representation is intentionally
+opaque but lossless, avoids expanding millions of Python integers, and validates
+the count/payload length before packing.
 
 For stable patch-and-repack workflows, use `patch_file()` or `parse_pack_file()`:
 
@@ -164,6 +216,33 @@ converter.patch_file(
     patch,
 )
 ```
+
+## Compatibility Validation
+
+The repository includes a schema-free corpus runner. Game files are not committed;
+point it at a locally unpacked `natives` tree:
+
+```bash
+python tests/corpus_probe.py D:/game/natives \
+  --expected-total 62768 \
+  --expected-version 16 \
+  --report layout-report.json
+```
+
+Version 0.7.1 fixes modern RSZ alignment regression found in 0.7.0 and folds the
+planned compatibility work into the bug-fix release: staged layout detection,
+structured diagnostics, safe readable parsing, verified-only repacking, and the
+schema-free probe command. The modern rule was validated against 62,768 MHWS
+`.user.3` files; four SystemSetting fixtures additionally passed readable export,
+repack export, byte-identical packing, and reparse checks.
+
+A second corpus from Monster Hunter Stories 3 was also validated: all 42,945 files
+passed strict layout detection and schema-driven repack export. All 42,945 rebuilt
+without exceptions; 38,548 were byte-identical. The remaining 4,397 are successful
+rebuilds but not byte-identical; observed causes include nonzero padding and
+alternate empty-string encodings, so they are not claimed as byte-identical
+fixtures. Two voxel files use the compact large-array representation; both rebuilt
+byte-identically, including the 6.55 MB `dg100_Root` payload.
 
 ## Build From Source
 

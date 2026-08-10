@@ -44,6 +44,8 @@ class User3Exporter(
         user_magic: int = USR_MAGIC,
         rsz_magic: int = RSZ_MAGIC,
         json_format: str = "readable",
+        preloaded_typedb: TypeDB | None = None,
+        preloaded_il2cpp_metadata: tuple[dict, dict] | None = None,
     ):
         """Initialize User3Exporter with validated configuration and state.
 
@@ -60,6 +62,10 @@ class User3Exporter(
             rsz_magic (int): Expected magic value for embedded RSZ blocks.
             json_format (str): "readable" for display-only trees or "repack" for
             full pack documents.
+            preloaded_typedb (TypeDB | None): Optional schema cache supplied by the
+            high-level converter.
+            preloaded_il2cpp_metadata (tuple[dict, dict] | None): Optional enum tables
+            and context supplied by the high-level converter.
 
         Returns:
             None. The method performs its documented side effect in place and raises on invalid input.
@@ -87,7 +93,9 @@ class User3Exporter(
         self.exclude_regexes = exclude_regexes or []
         self._exclude_patterns = [re.compile(p) for p in self.exclude_regexes]
         self.schema_path = self._resolve_schema_path(self.schema_dir)
-        self.typedb = TypeDB.load(self.schema_path)
+        self.typedb = preloaded_typedb or TypeDB.load(self.schema_path)
+        self._preloaded_il2cpp_metadata = preloaded_il2cpp_metadata
+        self._metadata_prepared = False
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
         self.enum_lookup: dict[str, dict[int, tuple[str, int]]] = {}
@@ -113,12 +121,16 @@ class User3Exporter(
         self.output_root.mkdir(parents=True, exist_ok=True)
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
-        # Rebuild enum metadata from the explicit il2cpp dump on every export to
-        # avoid cross-game or cross-version contamination.
+        # Cached metadata is keyed by the source file signature in REUser3Converter;
+        # direct User3Exporter callers still rebuild it from their explicit dump.
         enums_internal = self._ensure_internal_metadata_files()
-        self.enum_lookup = self._build_enum_lookup_from_enums_internal(enums_internal)
-        self._load_enum_context_from_il2cpp_dump()
-        self._ensure_enum_lookup()
+        if not self._metadata_prepared:
+            self.enum_lookup = self._build_enum_lookup_from_enums_internal(
+                enums_internal
+            )
+            self._load_enum_context_from_il2cpp_dump()
+            self._ensure_enum_lookup()
+            self._metadata_prepared = True
 
         success = 0
         failed = 0
