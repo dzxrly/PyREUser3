@@ -21,6 +21,9 @@ from ..core import (
 from ..schema import ClassDef, FieldDef
 
 
+LARGE_ARRAY_RAW_THRESHOLD = 1_000_000
+
+
 class ExporterFieldParserMixin:
     """Read scalar, array, object-reference, and struct field values according to RE_RSZ schema
     metadata.
@@ -189,10 +192,27 @@ class ExporterFieldParserMixin:
         """
         if field.is_array:
             count = reader.read_u32()
-            if count > 1_000_000:
-                # Treat impossible array lengths as cursor or template corruption
-                # and return an empty array rather than reading arbitrary memory.
-                return []
+            payload_start = reader.tell()
+            payload_end = self._fixed_array_payload_end(
+                payload_start,
+                field,
+                count,
+            )
+            if payload_end is not None and payload_end > reader.size:
+                raise ParseError(
+                    f"array {field.name!r} with {count} items exceeds the data section"
+                )
+            if count > LARGE_ARRAY_RAW_THRESHOLD:
+                if payload_end is None:
+                    raise ParseError(
+                        f"variable-size array {field.name!r} is too large to parse safely: "
+                        f"{count} items"
+                    )
+                payload = reader.read(payload_end - payload_start)
+                return {
+                    "_raw_array_count": count,
+                    "_raw_array_hex": payload.hex(),
+                }
             items = []
             for _ in range(count):
                 if reader.tell() >= reader.size:
@@ -211,6 +231,61 @@ class ExporterFieldParserMixin:
                 items.append(self._parse_scalar(reader, non_array, depth=depth))
             return items
         return self._parse_scalar(reader, field, depth=depth)
+
+    def _fixed_array_payload_end(
+        self,
+        payload_start: int,
+        field: FieldDef,
+        count: int,
+    ) -> int | None:
+        """Return the end of a fixed-width array payload without materializing items."""
+
+        if count == 0:
+            return payload_start
+        item_size = self._fixed_array_item_size(field)
+        if item_size is None:
+            return None
+        item_alignment = max(field.align, 1)
+        first_item = align(payload_start, item_alignment)
+        stride = align(item_size, item_alignment)
+        return first_item + (count - 1) * stride + item_size
+
+    def _fixed_array_item_size(self, field: FieldDef) -> int | None:
+        """Return a stable scalar width for arrays eligible for raw preservation."""
+
+        field_type = field.field_type
+        if field_type in {"Bool", "S8", "U8"}:
+            return 1
+        if field_type in {"S16", "U16"}:
+            return 2
+        if field_type == "Enum":
+            return enum_storage_size(self._enum_storage_type_for_field(field))
+        if field_type in {"S32", "U32", "Sfix", "F32", "Object", "UserData"}:
+            return 4
+        if field_type in {"S64", "U64", "F64"}:
+            return 8
+        if field_type in {"Guid", "GameObjectRef", "Uri"}:
+            return 16
+        if field_type in {
+            "Float2",
+            "Float3",
+            "Float4",
+            "Vec2",
+            "Vec3",
+            "Vec4",
+            "Quaternion",
+            "Color",
+            "AABB",
+            "Capsule",
+            "OBB",
+            "Mat3",
+            "Mat4",
+            "Position",
+        }:
+            return max(field.size // 4, 1) * 4
+        if field_type in {"String", "Resource", "C8", "RuntimeType", "Struct"}:
+            return None
+        return field.size if field.size > 0 else None
 
     def _estimate_min_instance_size(self, cls: ClassDef) -> int:
         """Estimate the smallest binary size required for a parsed instance layout.

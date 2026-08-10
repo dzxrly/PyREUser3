@@ -10,12 +10,15 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import threading
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
-from .core import RSZ_MAGIC, USR_MAGIC
+from .core import RSZ_MAGIC, USR_MAGIC, resolve_schema_path
 from .export import User3Exporter
 from .pack import User3Packer
+from .schema import TypeDB
+from .usr_container import probe_usr_file, probe_usr_path
 
 # Preserve the exported JSON structure so external scripts and hand-edited files remain
 # compatible across workflows.
@@ -67,6 +70,11 @@ class REUser3Converter:
         self.tree_depth = tree_depth
         self.user_magic = int(user_magic)
         self.rsz_magic = int(rsz_magic)
+        self._metadata_cache_lock = threading.RLock()
+        self._typedb_cache: tuple[tuple[str, int, int], TypeDB] | None = None
+        self._il2cpp_metadata_cache: (
+            tuple[tuple[str, int, int], tuple[dict, dict]] | None
+        ) = None
 
     def export_directory(
         self,
@@ -94,6 +102,7 @@ class REUser3Converter:
             exclude_regexes,
             json_format=self._normalize_json_format(json_format),
         )
+        self._prepare_exporter_metadata(exporter)
         return exporter.run()
 
     def export_file(
@@ -189,9 +198,41 @@ class REUser3Converter:
         Returns:
             JsonTree: JSON-compatible tree used by export, editing, or packing workflows.
         """
-        exporter = self._new_exporter(user3_path, Path.cwd(), [])
+        exporter = self._new_exporter(
+            user3_path,
+            Path.cwd(),
+            [],
+            json_format="repack",
+        )
         self._prepare_exporter_metadata(exporter)
         return exporter._parse_user3_pack(Path(user3_path))
+
+    def probe_user3(self, user3_path: str | Path, strict: bool = False) -> dict[str, Any]:
+        """Inspect one container without loading schema or enum metadata."""
+
+        return probe_usr_file(
+            user3_path,
+            user_magic=self.user_magic,
+            rsz_magic=self.rsz_magic,
+            policy="strict_probe" if strict else "safe_read",
+        )
+
+    def probe_directory(
+        self,
+        user3_root: str | Path,
+        *,
+        strict: bool = False,
+        include_successes: bool = False,
+    ) -> dict[str, Any]:
+        """Inspect a file tree without loading schema or enum metadata."""
+
+        return probe_usr_path(
+            user3_root,
+            user_magic=self.user_magic,
+            rsz_magic=self.rsz_magic,
+            policy="strict_probe" if strict else "safe_read",
+            include_successes=include_successes,
+        )
 
     @staticmethod
     def _normalize_json_format(json_format: str) -> str:
@@ -310,7 +351,8 @@ class REUser3Converter:
         include_patterns = [re.compile(p) for p in (include_regexes or [])]
         exclude_patterns = [re.compile(p) for p in (exclude_regexes or [])]
 
-        total = success = failed = skipped = 0
+        selected: list[tuple[Path, Path]] = []
+        skipped = 0
         for file_path in files:
             # Resolve and validate paths at the boundary so later code never guesses
             # relative to a surprising working directory.
@@ -327,22 +369,36 @@ class REUser3Converter:
             if any(pattern.search(rel) for pattern in exclude_patterns):
                 skipped += 1
                 continue
+            selected.append((file_path, Path(rel)))
 
-            total += 1
-            output_path = target_root / (
-                file_path.name
-                if source_root.is_file()
-                else file_path.relative_to(source_root)
-            )
+        if not selected:
+            return {"total": 0, "success": 0, "failed": 0, "skipped": skipped}
+
+        exporter = self._new_exporter(
+            source_root,
+            target_root,
+            [],
+            json_format="repack",
+        )
+        self._prepare_exporter_metadata(exporter)
+        packer = self._new_packer(target_root)
+        success = failed = 0
+        for file_path, relative_path in selected:
+            output_path = target_root / relative_path
             try:
                 # Treat each file independently so one malformed resource is reported
                 # but does not stop the rest of the batch.
-                self.patch_file(file_path, output_path, callback)
+                data = exporter._parse_user3_pack(file_path)
+                modified = self._run_callback(callback, data, file_path)
+                if modified is None:
+                    modified = data
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_bytes(packer.pack(modified))
                 success += 1
             except Exception:
                 failed += 1
         return {
-            "total": total,
+            "total": len(selected),
             "success": success,
             "failed": failed,
             "skipped": skipped,
@@ -372,6 +428,8 @@ class REUser3Converter:
         """
         if self.il2cpp_dump_path is None:
             raise FileNotFoundError("il2cpp_dump_path is required for exporting JSON")
+        typedb = self._get_cached_typedb()
+        il2cpp_metadata = self._get_cached_il2cpp_metadata()
         return User3Exporter(
             user3_root=user3_root,
             schema_dir=self.schema_path,
@@ -382,6 +440,8 @@ class REUser3Converter:
             user_magic=self.user_magic,
             rsz_magic=self.rsz_magic,
             json_format=json_format,
+            preloaded_typedb=typedb,
+            preloaded_il2cpp_metadata=il2cpp_metadata,
         )
 
     def _new_packer(self, output_root: str | Path | None) -> User3Packer:
@@ -399,6 +459,8 @@ class REUser3Converter:
             output_root=output_root,
             user_magic=self.user_magic,
             rsz_magic=self.rsz_magic,
+            preloaded_typedb=self._get_cached_typedb(),
+            preloaded_il2cpp_metadata=self._get_cached_il2cpp_metadata(),
         )
 
     def _prepare_exporter_metadata(self, exporter: User3Exporter) -> None:
@@ -419,14 +481,58 @@ class REUser3Converter:
         # parsing keeps the same lookup only in memory.
         # Keep the generated metadata attached to the exporter so field parsing can
         # format enum names consistently.
-        enums_internal, enum_context = exporter.export_il2cpp_metadata_from_path(
-            self.il2cpp_dump_path
-        )
+        metadata = self._get_cached_il2cpp_metadata()
+        if metadata is None:
+            raise FileNotFoundError("il2cpp_dump_path is required for parsing JSON")
+        enums_internal, enum_context = metadata
         exporter.enum_lookup = exporter._build_enum_lookup_from_enums_internal(
             enums_internal
         )
         exporter._apply_enum_context(enum_context)
         exporter._ensure_enum_lookup()
+        exporter._metadata_prepared = True
+
+    @staticmethod
+    def _metadata_file_signature(path: Path) -> tuple[str, int, int]:
+        """Return an inexpensive cache key that changes when a metadata file changes."""
+
+        resolved = path.resolve(strict=True)
+        stat = resolved.stat()
+        return str(resolved), stat.st_size, stat.st_mtime_ns
+
+    def _get_cached_typedb(self) -> TypeDB:
+        """Load the schema once per converter and invalidate it after file changes."""
+
+        schema_path = resolve_schema_path(self.schema_path)
+        signature = self._metadata_file_signature(schema_path)
+        with self._metadata_cache_lock:
+            if self._typedb_cache is None or self._typedb_cache[0] != signature:
+                self._typedb_cache = (signature, TypeDB.load(schema_path))
+            return self._typedb_cache[1]
+
+    def _get_cached_il2cpp_metadata(self) -> tuple[dict, dict] | None:
+        """Stream the il2cpp dump once per converter and invalidate after changes."""
+
+        if self.il2cpp_dump_path is None:
+            return None
+        signature = self._metadata_file_signature(self.il2cpp_dump_path)
+        with self._metadata_cache_lock:
+            if (
+                self._il2cpp_metadata_cache is None
+                or self._il2cpp_metadata_cache[0] != signature
+            ):
+                metadata = User3Exporter.export_il2cpp_metadata_from_path(
+                    self.il2cpp_dump_path
+                )
+                self._il2cpp_metadata_cache = (signature, metadata)
+            return self._il2cpp_metadata_cache[1]
+
+    def clear_metadata_cache(self) -> None:
+        """Discard cached schema and il2cpp metadata for this converter."""
+
+        with self._metadata_cache_lock:
+            self._typedb_cache = None
+            self._il2cpp_metadata_cache = None
 
     @staticmethod
     def _discover_user3_files(user3_root: Path) -> list[Path]:

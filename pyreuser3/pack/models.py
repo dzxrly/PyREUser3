@@ -31,6 +31,14 @@ class InstanceRef:
     index: int
 
 
+@dataclass(frozen=True)
+class RawArrayValue:
+    """Preserve a large fixed-width array without expanding every scalar item."""
+
+    count: int
+    payload: bytes
+
+
 @dataclass
 class StructValue:
     """Hold a schema class definition and prepared field values for an inline struct payload.

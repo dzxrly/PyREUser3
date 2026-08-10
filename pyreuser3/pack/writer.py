@@ -15,9 +15,10 @@ from .models import (
     InstanceRef,
     InstanceSpec,
     PackError,
+    RawArrayValue,
     StructValue,
 )
-from ..core import align, enum_storage_type_from_size
+from ..core import align, enum_storage_size, enum_storage_type_from_size
 from ..enum_codec import ENUM_LABEL_RE
 from ..schema import FieldDef
 from ..usr_layouts import (
@@ -181,13 +182,18 @@ class PackerWriterMixin:
             )
 
         if rsz_userdata:
+            userdata_alignment = rsz_layout.userdata_alignment_rule
             self._align_from_base(
                 writer,
-                rsz_layout.rsz_userdata_alignment,
-                rsz_layout.rsz_userdata_alignment_base,
+                userdata_alignment.alignment,
+                userdata_alignment.origin,
                 rsz_start,
             )
             userdata_offset = writer.tell() - rsz_start
+            if not userdata_alignment.is_aligned(userdata_offset, rsz_start):
+                raise PackError(
+                    "writer produced an RSZ userdata table that violates layout alignment"
+                )
             rsz_userdata_entry_offsets: list[int] = []
             for _item in rsz_userdata:
                 rsz_userdata_entry_offsets.append(writer.tell())
@@ -215,13 +221,18 @@ class PackerWriterMixin:
         else:
             userdata_offset = -1
 
+        data_alignment = rsz_layout.data_alignment_rule
         self._align_from_base(
             writer,
-            rsz_layout.rsz_data_alignment,
-            rsz_layout.rsz_data_alignment_base,
+            data_alignment.alignment,
+            data_alignment.origin,
             rsz_start,
         )
         data_offset = writer.tell() - rsz_start
+        if not data_alignment.is_aligned(data_offset, rsz_start):
+            raise PackError(
+                "writer produced an RSZ data block that violates layout alignment"
+            )
         if userdata_offset < 0:
             userdata_offset = data_offset
         writer.write(bytes(data_writer.data))
@@ -335,6 +346,24 @@ class PackerWriterMixin:
             None. The method performs its documented side effect in place and raises on invalid input.
         """
         if field_def.is_array:
+            if isinstance(value, RawArrayValue):
+                writer.write_struct("<I", value.count)
+                expected_size = self._raw_array_payload_size(
+                    writer.tell(),
+                    field_def,
+                    value.count,
+                )
+                if expected_size is None:
+                    raise PackError(
+                        f"raw array {field_def.name!r} is not fixed-width"
+                    )
+                if len(value.payload) != expected_size:
+                    raise PackError(
+                        f"raw array {field_def.name!r} payload has "
+                        f"{len(value.payload)} bytes, expected {expected_size}"
+                    )
+                writer.write(value.payload)
+                return
             items = value if isinstance(value, list) else []
             writer.write_struct("<I", len(items))
             non_array = FieldDef(
@@ -352,6 +381,62 @@ class PackerWriterMixin:
                 self._write_scalar(writer, non_array, item)
             return
         self._write_scalar(writer, field_def, value)
+
+    def _raw_array_payload_size(
+        self,
+        payload_start: int,
+        field_def: FieldDef,
+        count: int,
+    ) -> int | None:
+        """Return the exact encoded payload size for a fixed-width raw array."""
+
+        if count == 0:
+            return 0
+        item_size = self._raw_array_item_size(field_def)
+        if item_size is None:
+            return None
+        item_alignment = max(field_def.align, 1)
+        first_item = align(payload_start, item_alignment)
+        stride = align(item_size, item_alignment)
+        end = first_item + (count - 1) * stride + item_size
+        return end - payload_start
+
+    def _raw_array_item_size(self, field_def: FieldDef) -> int | None:
+        """Return the writer's stable scalar width for a raw array element."""
+
+        field_type = field_def.field_type
+        if field_type in {"Bool", "S8", "U8"}:
+            return 1
+        if field_type in {"S16", "U16"}:
+            return 2
+        if field_type == "Enum":
+            return enum_storage_size(self._enum_storage_type_for_field(field_def))
+        if field_type in {"S32", "U32", "Sfix", "F32", "Object", "UserData"}:
+            return 4
+        if field_type in {"S64", "U64", "F64"}:
+            return 8
+        if field_type in {"Guid", "GameObjectRef", "Uri"}:
+            return 16
+        if field_type in {
+            "Float2",
+            "Float3",
+            "Float4",
+            "Vec2",
+            "Vec3",
+            "Vec4",
+            "Quaternion",
+            "Color",
+            "AABB",
+            "Capsule",
+            "OBB",
+            "Mat3",
+            "Mat4",
+            "Position",
+        }:
+            return max(field_def.size // 4, 1) * 4
+        if field_type in {"String", "Resource", "C8", "RuntimeType", "Struct"}:
+            return None
+        return field_def.size if field_def.size > 0 else None
 
     def _write_scalar(
         self, writer: BinaryWriter, field_def: FieldDef, value: Any

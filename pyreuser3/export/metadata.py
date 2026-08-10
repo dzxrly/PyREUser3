@@ -145,16 +145,22 @@ class ExporterMetadataMixin:
             raise FileNotFoundError(
                 f"il2cpp_dump.json not found: {self.il2cpp_dump_path}"
             )
-        try:
-            enums_internal, enum_context = self.export_il2cpp_metadata_from_path(
-                dump_path
-            )
-        except Exception as exc:
-            raise ParseError(f"failed to read il2cpp dump: {dump_path}") from exc
+        preloaded = getattr(self, "_preloaded_il2cpp_metadata", None)
+        if preloaded is None:
+            try:
+                enums_internal, enum_context = self.export_il2cpp_metadata_from_path(
+                    dump_path
+                )
+            except Exception as exc:
+                raise ParseError(f"failed to read il2cpp dump: {dump_path}") from exc
+            self._preloaded_il2cpp_metadata = (enums_internal, enum_context)
+        else:
+            enums_internal, enum_context = preloaded
 
         self.output_root.mkdir(parents=True, exist_ok=True)
         enums_out = self.output_root / "Enums_Internal.json"
-        self._pending_enum_context = enum_context
+        if not getattr(self, "_metadata_prepared", False):
+            self._pending_enum_context = enum_context
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
         with enums_out.open("w", encoding="utf-8") as f:
