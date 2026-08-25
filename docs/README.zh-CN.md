@@ -256,30 +256,6 @@ converter.patch_file(
 )
 ```
 
-## 兼容性验证
-
-仓库内提供无需 schema 的语料测试脚本。游戏文件不会提交到仓库，请让脚本指向本地已解包的
-`natives` 目录：
-
-```bash
-python tests/corpus_probe.py D:/game/natives \
-  --expected-total 62768 \
-  --expected-version 16 \
-  --report layout-report.json
-```
-
-0.7.2 在 0.7.1 的现代 RSZ 对齐修复基础上，改为先原子化验证 repack 容器元数据再写入二进制，
-并在拆解未命名 flags 组合前优先保留精确枚举成员。该版本继续提供分阶段布局探测、结构化诊断、
-安全 readable 解析、仅验证布局可 repack，以及无需 schema 的 probe 命令。新的现代布局规则已用
-62,768 个 MHWS `.user.3` 文件验证；其中四个 SystemSetting 样本还完成了 readable 导出、
-repack 导出、逐字节一致回封和二次解析验证。
-
-另外还验证了 Monster Hunter Stories 3 语料：42,945 个文件全部通过严格 layout 探测和
-schema 驱动的 repack 导出；42,945 个文件全部能够无异常地重新构建，其中 38,548 个逐字节
-一致。其余 4,397 个可以成功重建但并非逐字节一致；已观察到的原因包括非零 padding、空字符串
-的另一种物理编码，因此不把它们宣称为逐字节 fixture。两个使用紧凑超大数组表示的 voxel 文件
-都能逐字节一致回封，其中包括 6.55 MB 的 `dg100_Root` payload。
-
 ## 常见注意事项
 
 - schema JSON、`il2cpp_dump.json` 和 `.user.3` 文件应来自同一个游戏版本；
