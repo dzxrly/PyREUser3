@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from .container import RepackContainer
 from .models import (
     BinaryWriter,
     ExternalUserdataSpec,
@@ -21,12 +22,6 @@ from .models import (
 from ..core import align, enum_storage_size, enum_storage_type_from_size
 from ..enum_codec import ENUM_LABEL_RE
 from ..schema import FieldDef
-from ..usr_layouts import (
-    DEFAULT_RSZ_HEADER_LAYOUT_ID,
-    DEFAULT_USR_LAYOUT_ID,
-    get_rsz_header_layout,
-    get_usr_layout,
-)
 
 class PackerWriterMixin:
     """Serialize planned instances, tables, headers, and field values into the binary .user.3
@@ -45,43 +40,26 @@ class PackerWriterMixin:
         Returns:
             bytes: Encoded binary data ready to write to disk.
         """
-        layout = getattr(self, "usr_layout", None)
-        if layout is None:
-            layout = get_usr_layout(DEFAULT_USR_LAYOUT_ID)
-        if layout is None:
-            raise PackError(f"default USR layout is not registered: {DEFAULT_USR_LAYOUT_ID}")
-        rsz_layout = getattr(self, "rsz_header_layout", None)
-        if rsz_layout is None:
-            rsz_layout = get_rsz_header_layout(DEFAULT_RSZ_HEADER_LAYOUT_ID)
-        if rsz_layout is None:
-            raise PackError(
-                "default RSZ header layout is not registered: "
-                f"{DEFAULT_RSZ_HEADER_LAYOUT_ID}"
-            )
+        container = getattr(self, "container", None)
+        if not isinstance(container, RepackContainer):
+            raise PackError("container metadata must be planned before binary writing")
+        layout = container.usr_layout
+        rsz_layout = container.rsz_layout
         if not layout.repack_supported:
             raise PackError(f"USR layout {layout.identifier} is read-only")
         if not rsz_layout.repack_supported:
             raise PackError(f"RSZ header layout {rsz_layout.identifier} is read-only")
-        usr_resources = list(getattr(self, "usr_resources", []))
-        usr_userdata = list(getattr(self, "usr_userdata", []))
-        rsz_userdata = list(getattr(self, "rsz_userdata", []))
-        raw_rsz_version = getattr(self, "rsz_version", None)
-        if not isinstance(raw_rsz_version, int):
-            raise PackError("RSZ version must come from repack layout metadata")
-        rsz_version = raw_rsz_version
+        usr_resources = container.usr_resources
+        usr_userdata = container.usr_userdata
+        rsz_userdata = container.rsz_userdata
+        rsz_version = container.rsz_version
         if not rsz_layout.supports_version(rsz_version):
             raise PackError(
                 f"RSZ version {rsz_version} is not supported by header layout "
                 f"{rsz_layout.identifier}"
             )
-        rsz_reserved = int(getattr(self, "rsz_reserved", 0))
-        header_padding = bytes(
-            getattr(
-                self,
-                "usr_header_padding",
-                b"\x00" * layout.header_padding_size,
-            )
-        )
+        rsz_reserved = container.rsz_reserved
+        header_padding = container.usr_header_padding
         if len(header_padding) != layout.header_padding_size:
             raise PackError(
                 f"layout {layout.identifier} requires {layout.header_padding_size} "

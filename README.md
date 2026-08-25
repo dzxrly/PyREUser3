@@ -217,33 +217,6 @@ converter.patch_file(
 )
 ```
 
-## Compatibility Validation
-
-The repository includes a schema-free corpus runner. Game files are not committed;
-point it at a locally unpacked `natives` tree:
-
-```bash
-python tests/corpus_probe.py D:/game/natives \
-  --expected-total 62768 \
-  --expected-version 16 \
-  --report layout-report.json
-```
-
-Version 0.7.1 fixes modern RSZ alignment regression found in 0.7.0 and folds the
-planned compatibility work into the bug-fix release: staged layout detection,
-structured diagnostics, safe readable parsing, verified-only repacking, and the
-schema-free probe command. The modern rule was validated against 62,768 MHWS
-`.user.3` files; four SystemSetting fixtures additionally passed readable export,
-repack export, byte-identical packing, and reparse checks.
-
-A second corpus from Monster Hunter Stories 3 was also validated: all 42,945 files
-passed strict layout detection and schema-driven repack export. All 42,945 rebuilt
-without exceptions; 38,548 were byte-identical. The remaining 4,397 are successful
-rebuilds but not byte-identical; observed causes include nonzero padding and
-alternate empty-string encodings, so they are not claimed as byte-identical
-fixtures. Two voxel files use the compact large-array representation; both rebuilt
-byte-identically, including the 6.55 MB `dg100_Root` payload.
-
 ## Build From Source
 
 ```bash
