@@ -11,12 +11,10 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .container import RepackContainer
 from .models import (
     ExternalUserdataSpec,
     InstanceSpec,
-    RszUserdataSpec,
-    UsrResourceSpec,
-    UsrUserdataSpec,
 )
 from .plan import PackerPlanMixin
 from .writer import PackerWriterMixin
@@ -25,12 +23,6 @@ from ..enum_codec import is_probable_flags_enum
 from ..export import User3Exporter
 from ..rich_ui import BatchProgress
 from ..schema import TypeDB
-from ..usr_layouts import (
-    DEFAULT_RSZ_HEADER_LAYOUT_ID,
-    DEFAULT_USR_LAYOUT_ID,
-    get_rsz_header_layout,
-    get_usr_layout,
-)
 
 
 class User3Packer(PackerPlanMixin, PackerWriterMixin):
@@ -97,25 +89,9 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
             )
         }
         self.instances: list[InstanceSpec | ExternalUserdataSpec | None] = []
-        self.usr_layout = get_usr_layout(DEFAULT_USR_LAYOUT_ID)
-        if self.usr_layout is None:
-            raise RuntimeError(f"default USR layout is not registered: {DEFAULT_USR_LAYOUT_ID}")
-        self.rsz_header_layout = get_rsz_header_layout(
-            DEFAULT_RSZ_HEADER_LAYOUT_ID
-        )
-        if self.rsz_header_layout is None:
-            raise RuntimeError(
-                "default RSZ header layout is not registered: "
-                f"{DEFAULT_RSZ_HEADER_LAYOUT_ID}"
-            )
-        self.usr_header_padding = b"\x00" * self.usr_layout.header_padding_size
-        self.usr_resources: list[UsrResourceSpec] = []
-        self.usr_userdata: list[UsrUserdataSpec] = []
-        # A numeric RSZ version must be loaded from repack metadata.  The modern
-        # header family is shared across games and must not imply MHWS version 16.
-        self.rsz_version: int | None = None
-        self.rsz_reserved = 0
-        self.rsz_userdata: list[RszUserdataSpec] = []
+        # The container is committed atomically only after one complete repack document
+        # has passed layout, table, instance, and resource validation.
+        self.container: RepackContainer | None = None
 
     def pack_json_file(self, json_path: str | Path, output_path: str | Path) -> Path:
         """Pack json file.

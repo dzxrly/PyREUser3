@@ -71,6 +71,9 @@ class ExporterPostprocessMixin:
     def _format_enum_value(self, fixed_enum_type: str, value: int) -> Any:
         """Format enum value.
 
+        Exact declared members stay intact; flagged enums are decomposed only when the
+        numeric value has no exact member.
+
         The method keeps parsing, metadata lookup, and JSON shaping explicit so incomplete
         templates can still produce inspectable output.
 
@@ -86,7 +89,15 @@ class ExporterPostprocessMixin:
         value_map = self.enum_lookup.get(fixed_enum_type)
         if value_map is None:
             return value
-        # Leave numeric enum values unchanged when no enum lookup is available for the current context.
+        matched = enum_member_for_value(
+            self.enum_lookup,
+            fixed_enum_type,
+            value,
+            getattr(self, "enum_underlying_types", {}),
+        )
+        if matched is not None:
+            member_name, fixed_value = matched
+            return self._id_formatter(member_name, fixed_value)
         if fixed_enum_type in getattr(self, "enum_flags", set()):
             return decode_flags(
                 self.enum_lookup,
@@ -94,16 +105,7 @@ class ExporterPostprocessMixin:
                 value,
                 getattr(self, "enum_underlying_types", {}),
             )
-        matched = enum_member_for_value(
-            self.enum_lookup,
-            fixed_enum_type,
-            value,
-            getattr(self, "enum_underlying_types", {}),
-        )
-        if matched is None:
-            return value
-        member_name, fixed_value = matched
-        return self._id_formatter(member_name, fixed_value)
+        return value
 
     @staticmethod
     def _looks_like_class_name(text: str) -> bool:

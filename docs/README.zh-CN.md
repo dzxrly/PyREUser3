@@ -268,10 +268,11 @@ python tests/corpus_probe.py D:/game/natives \
   --report layout-report.json
 ```
 
-0.7.1 修复了 0.7.0 引入的现代 RSZ 对齐回归，并把原计划中的兼容性工作合并进本次 bugfix：
-分阶段布局探测、结构化诊断、安全 readable 解析、仅验证布局可 repack，以及无需 schema 的
-probe 命令。新的现代布局规则已用 62,768 个 MHWS `.user.3` 文件验证；其中四个
-SystemSetting 样本还完成了 readable 导出、repack 导出、逐字节一致回封和二次解析验证。
+0.7.2 在 0.7.1 的现代 RSZ 对齐修复基础上，改为先原子化验证 repack 容器元数据再写入二进制，
+并在拆解未命名 flags 组合前优先保留精确枚举成员。该版本继续提供分阶段布局探测、结构化诊断、
+安全 readable 解析、仅验证布局可 repack，以及无需 schema 的 probe 命令。新的现代布局规则已用
+62,768 个 MHWS `.user.3` 文件验证；其中四个 SystemSetting 样本还完成了 readable 导出、
+repack 导出、逐字节一致回封和二次解析验证。
 
 另外还验证了 Monster Hunter Stories 3 语料：42,945 个文件全部通过严格 layout 探测和
 schema 驱动的 repack 导出；42,945 个文件全部能够无异常地重新构建，其中 38,548 个逐字节

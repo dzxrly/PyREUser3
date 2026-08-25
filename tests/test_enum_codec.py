@@ -155,6 +155,33 @@ class EnumCodecTests(unittest.TestCase):
             )
         )
 
+    def test_exact_enum_member_precedes_flags_decoding(self):
+        post = CodecPostprocessor()
+        enum_type = "app.HunterRankCapFlag.FLAG_Fixed"
+        post.enum_lookup[enum_type] = {
+            1: ("MAIN_2", 1),
+            2: ("MAIN_3", 2),
+            8: ("EX_9_15", 8),
+            11: ("EX_41_999", 11),
+        }
+        post.enum_underlying_types[enum_type] = "S32"
+        post.enum_flags.add(enum_type)
+        post.class_field_fixed_types["app.Owner"]["RankCap"] = enum_type
+
+        self.assertEqual(
+            post._postprocess_enum_nodes({"RankCap": 11}, current_class="app.Owner"),
+            {"RankCap": "[11] EX_41_999"},
+        )
+
+    def test_exact_composite_flag_member_is_not_decomposed(self):
+        post = CodecPostprocessor()
+        post.enum_lookup["app.Mask"][66] = ("ANGRY_UNIQUE_03", 66)
+
+        self.assertEqual(
+            post._postprocess_enum_nodes({"Mask": 66}, current_class="app.Owner"),
+            {"Mask": "[66] ANGRY_UNIQUE_03"},
+        )
+
     def test_plan_normalizes_bitset_v2_and_scalar_flags(self):
         plan = CodecPlan()
         bitset_class = ClassDef(

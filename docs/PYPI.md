@@ -27,12 +27,14 @@ Verified H30/modern layouts support repacking. Experimental physical H28 and leg
 RSZ v3 layouts are readable for analysis but intentionally blocked from repacking
 until real fixtures provide byte-for-byte validation.
 
-Version 0.7.1 fixes the 0.7.0 modern RSZ alignment regression. Modern userdata and
-data targets use absolute 16-byte file alignment even though their stored offsets
-remain RSZ-relative. Readable parsing accepts alignment-only deviations without
-hiding structural corruption, while the probe API reports them explicitly. Repack
-output blocks layouts carrying unverified diagnostics. The strict schema-free
-probe can validate large local corpora.
+Version 0.7.2 validates repack container metadata atomically before binary writing
+and preserves exact enum members before decomposing unnamed flag combinations. It
+retains the 0.7.1 modern RSZ alignment fix: modern userdata and data targets use
+absolute 16-byte file alignment even though their stored offsets remain
+RSZ-relative. Readable parsing accepts alignment-only deviations without hiding
+structural corruption, while the probe API reports them explicitly. Repack output
+blocks layouts carrying unverified diagnostics. The strict schema-free probe can
+validate large local corpora.
 
 Repeated operations on one `REUser3Converter` reuse schema and il2cpp metadata,
 with automatic file-signature invalidation and an explicit

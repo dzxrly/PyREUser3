@@ -229,12 +229,13 @@ python tests/corpus_probe.py D:/game/natives \
   --report layout-report.json
 ```
 
-Version 0.7.1 fixes modern RSZ alignment regression found in 0.7.0 and folds the
-planned compatibility work into the bug-fix release: staged layout detection,
-structured diagnostics, safe readable parsing, verified-only repacking, and the
-schema-free probe command. The modern rule was validated against 62,768 MHWS
-`.user.3` files; four SystemSetting fixtures additionally passed readable export,
-repack export, byte-identical packing, and reparse checks.
+Version 0.7.2 builds on the 0.7.1 modern RSZ alignment fix by validating repack
+container metadata atomically before binary writing and by preserving exact enum
+members before decomposing unnamed flag combinations. It retains staged layout
+detection, structured diagnostics, safe readable parsing, verified-only repacking,
+and the schema-free probe command. The modern rule was validated against 62,768
+MHWS `.user.3` files; four SystemSetting fixtures additionally passed readable
+export, repack export, byte-identical packing, and reparse checks.
 
 A second corpus from Monster Hunter Stories 3 was also validated: all 42,945 files
 passed strict layout detection and schema-driven repack export. All 42,945 rebuilt

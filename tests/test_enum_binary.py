@@ -5,10 +5,17 @@ from pathlib import Path
 
 from pyreuser3.core import BinaryReader, RSZ_MAGIC, USR_MAGIC, enum_storage_type_from_size
 from pyreuser3.export.fields import ExporterFieldParserMixin
-from pyreuser3.pack.models import BinaryWriter
+from pyreuser3.pack.container import RepackContainer
+from pyreuser3.pack.models import BinaryWriter, PackError
 from pyreuser3.pack.plan import PackerPlanMixin
 from pyreuser3.pack.writer import PackerWriterMixin
 from pyreuser3.schema import FieldDef, TypeDB
+from pyreuser3.usr_layouts import (
+    DEFAULT_RSZ_HEADER_LAYOUT_ID,
+    DEFAULT_USR_LAYOUT_ID,
+    get_rsz_header_layout,
+    get_usr_layout,
+)
 
 
 class EnumFieldParser(ExporterFieldParserMixin):
@@ -32,10 +39,23 @@ class EnumFieldWriter(PackerWriterMixin):
 
 class EmptyBinaryWriter(PackerWriterMixin):
     def __init__(self):
+        usr_layout = get_usr_layout(DEFAULT_USR_LAYOUT_ID)
+        rsz_layout = get_rsz_header_layout(DEFAULT_RSZ_HEADER_LAYOUT_ID)
+        if usr_layout is None or rsz_layout is None:
+            raise RuntimeError("default test layouts are not registered")
         self.instances = [None]
         self.user_magic = USR_MAGIC
         self.rsz_magic = RSZ_MAGIC
-        self.rsz_version = 16
+        self.container = RepackContainer(
+            usr_layout=usr_layout,
+            rsz_layout=rsz_layout,
+            usr_header_padding=b"\x00" * usr_layout.header_padding_size,
+            usr_resources=(),
+            usr_userdata=(),
+            rsz_version=16,
+            rsz_reserved=0,
+            rsz_userdata=(),
+        )
 
 
 class PlanDefaults(PackerPlanMixin):
@@ -43,6 +63,13 @@ class PlanDefaults(PackerPlanMixin):
 
 
 class EnumBinaryTests(unittest.TestCase):
+    def test_build_binary_requires_validated_container_metadata(self):
+        writer_mixin = EmptyBinaryWriter()
+        writer_mixin.container = None
+
+        with self.assertRaisesRegex(PackError, "container metadata must be planned"):
+            writer_mixin._build_binary([])
+
     def test_build_binary_uses_shared_alignment_helper(self):
         writer_mixin = EmptyBinaryWriter()
 
