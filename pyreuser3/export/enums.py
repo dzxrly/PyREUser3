@@ -18,6 +18,9 @@ from ..core import ENUM_UNUSED_KEY, normalize_enum_storage_type
 _FIXED_ENUM_RE = re.compile(r"[A-Za-z0-9_.+]+_Fixed")
 _PROPERTY_METHOD_RE = re.compile(r"^(?:get|set)_(?P<name>.+?)(?:\d+)?$")
 _BACKING_FIELD_RE = re.compile(r"^<(?P<name>[^>]+)>")
+_INTEGER_STORAGE_TYPES = frozenset(
+    {"S8", "U8", "S16", "U16", "S32", "U32", "S64", "U64"}
+)
 
 
 class ExporterEnumSourceMixin:
@@ -103,6 +106,39 @@ class ExporterEnumSourceMixin:
             return
         for candidate in cls._field_name_variants(field_name):
             field_map.setdefault(candidate, fixed_type)
+
+    @classmethod
+    def _add_fixed_backing_candidate(
+        cls,
+        candidates: dict[str, set[str]],
+        field_name: Any,
+        type_name: Any,
+    ) -> None:
+        """Record an integer ``*_Fixed`` backing field by its runtime property name."""
+        if not isinstance(field_name, str):
+            return
+        storage_type = normalize_enum_storage_type(type_name)
+        if storage_type not in _INTEGER_STORAGE_TYPES:
+            return
+        for field_variant in cls._field_name_variants(field_name):
+            normalized_name = field_variant.lstrip("_")
+            if not normalized_name.endswith("_Fixed"):
+                continue
+            property_name = normalized_name[: -len("_Fixed")]
+            if property_name:
+                candidates.setdefault(property_name, set()).add(field_variant)
+            candidates.setdefault(normalized_name, set()).add(field_variant)
+
+    @staticmethod
+    def _method_return_type(method: Any) -> str | None:
+        """Return one concrete method return type when metadata exposes it."""
+        if not isinstance(method, dict):
+            return None
+        returns = method.get("returns")
+        if not isinstance(returns, dict):
+            return None
+        return_type = returns.get("type")
+        return return_type if isinstance(return_type, str) and return_type else None
 
     @staticmethod
     def _method_matches_property(method_name: str, getter_or_setter: str) -> bool:
@@ -264,6 +300,7 @@ class ExporterEnumSourceMixin:
             "enum_underlying_types": {},
             "enum_types": set(),
             "serializable_fallback_candidates": [],
+            "fixed_backing_candidates": [],
         }
 
     @classmethod
@@ -282,6 +319,7 @@ class ExporterEnumSourceMixin:
                 state["enum_underlying_types"][class_name] = storage_type
 
         field_map: dict[str, str] = {}
+        fixed_backing_fields: dict[str, set[str]] = {}
         fields_obj = obj.get("fields")
         if isinstance(fields_obj, dict):
             for field_name, field_info in fields_obj.items():
@@ -289,6 +327,9 @@ class ExporterEnumSourceMixin:
                     continue
                 cls._add_field_fixed_type(
                     field_map, field_name, field_info.get("type")
+                )
+                cls._add_fixed_backing_candidate(
+                    fixed_backing_fields, field_name, field_info.get("type")
                 )
 
         # Older dumps expose RE_RSZ field hints through an explicit RSZ array.
@@ -303,6 +344,9 @@ class ExporterEnumSourceMixin:
                 cls._add_field_fixed_type(
                     field_map, potential_name, rsz_field.get("type")
                 )
+                cls._add_fixed_backing_candidate(
+                    fixed_backing_fields, potential_name, rsz_field.get("type")
+                )
 
         # Newer dumps can omit RSZ entirely but keep property/type hints here.
         reflection_props = obj.get("reflection_properties")
@@ -311,8 +355,12 @@ class ExporterEnumSourceMixin:
                 if not isinstance(prop_name, str) or not isinstance(prop_info, dict):
                     continue
                 cls._add_field_fixed_type(field_map, prop_name, prop_info.get("type"))
+                cls._add_fixed_backing_candidate(
+                    fixed_backing_fields, prop_name, prop_info.get("type")
+                )
 
         methods_obj = obj.get("methods")
+        runtime_property_types: dict[str, set[str]] = {}
         if isinstance(methods_obj, dict):
             properties_obj = obj.get("properties")
             if isinstance(properties_obj, dict):
@@ -350,6 +398,12 @@ class ExporterEnumSourceMixin:
                 method_prop_name = cls._property_name_from_method(method_name)
                 if method_prop_name is None:
                     continue
+                if method_name.startswith("get_"):
+                    return_type = cls._method_return_type(method)
+                    if return_type is not None:
+                        runtime_property_types.setdefault(
+                            method_prop_name, set()
+                        ).add(return_type)
                 fixed_type = None
                 if method_name.startswith("get_"):
                     fixed_type = cls._fixed_type_from_method_return(method)
@@ -357,6 +411,18 @@ class ExporterEnumSourceMixin:
                     fixed_type = cls._fixed_type_from_method_params(method)
                 if fixed_type is not None:
                     cls._add_field_fixed_type(field_map, method_prop_name, fixed_type)
+
+        for property_name, field_names in fixed_backing_fields.items():
+            runtime_types = runtime_property_types.get(property_name, set())
+            if len(runtime_types) != 1:
+                continue
+            state["fixed_backing_candidates"].append(
+                (
+                    class_name,
+                    tuple(sorted(field_names)),
+                    next(iter(runtime_types)),
+                )
+            )
 
         if field_map:
             state["class_field_fixed_types"][class_name] = field_map
@@ -410,6 +476,20 @@ class ExporterEnumSourceMixin:
             fallback_types = cls._enum_type_name_fallbacks(class_name, enum_types)
             if len(fallback_types) == 1:
                 serializable_to_fixed[class_name] = fallback_types[0]
+
+        for class_name, field_names, runtime_type in state[
+            "fixed_backing_candidates"
+        ]:
+            fixed_type = (
+                runtime_type
+                if runtime_type.endswith("_Fixed")
+                else f"{runtime_type}_Fixed"
+            )
+            if fixed_type not in enum_types:
+                continue
+            field_map = state["class_field_fixed_types"].setdefault(class_name, {})
+            for field_name in field_names:
+                field_map.setdefault(field_name, fixed_type)
 
         for class_name, raw_types in state["generic_candidates"].items():
             enum_args = list(dict.fromkeys(t for t in raw_types if t in enum_types))

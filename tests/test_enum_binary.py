@@ -139,6 +139,38 @@ class EnumBinaryTests(unittest.TestCase):
 
         self.assertEqual(bytes(writer.data), b"\x02\x00\x00\x00")
 
+    def test_erased_fixed_field_accepts_unsigned_numeric_label(self):
+        writer_mixin = EnumFieldWriter()
+        writer = BinaryWriter()
+        field = FieldDef(
+            name="_StageID_Fixed",
+            field_type="S32",
+            original_type="System.Int32",
+            size=4,
+            align=4,
+            is_array=False,
+        )
+
+        writer_mixin._write_scalar(writer, field, "[3068809728] ST101")
+
+        self.assertEqual(bytes(writer.data), bytes.fromhex("00 52 ea b6"))
+
+    def test_erased_fixed_field_accepts_signed_runtime_label(self):
+        writer_mixin = EnumFieldWriter()
+        writer = BinaryWriter()
+        field = FieldDef(
+            name="_StageID_Fixed",
+            field_type="S32",
+            original_type="System.Int32",
+            size=4,
+            align=4,
+            is_array=False,
+        )
+
+        writer_mixin._write_scalar(writer, field, "[-1226157568] ST101")
+
+        self.assertEqual(bytes(writer.data), bytes.fromhex("00 52 ea b6"))
+
     def test_runtime_type_reader_uses_c8_string_layout(self):
         parser = EnumFieldParser()
         reader = BinaryReader(b"\x04\x00\x00\x00abc\x00tail")

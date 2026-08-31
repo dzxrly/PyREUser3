@@ -169,8 +169,10 @@ Use `json_format="readable"` for the same shape produced by `export_file()`. Thi
 shape is read-only. Use `json_format="repack"` for the full document accepted by
 `pack()`; the packer rejects readable JSON.
 
-Enum fields are rendered as `[numeric] Name` labels using the enum's actual storage
-width. Scalar flag enums are rendered as arrays of labels. ``ace.Bitset`1<T>`` values are
+Readable enum fields are rendered as `[numeric] Name` labels using the enum's actual
+storage width and signedness, so signed Fixed IDs match their in-game runtime values.
+Repack documents retain canonical unsigned Fixed prefixes for stable machine editing.
+Scalar flag enums are rendered as arrays of labels. ``ace.Bitset`1<T>`` values are
 rendered as enum-index labels together with `_MaxElement` and `_WordCount`, so unknown
 bits and padded word arrays remain reversible. Repack exports use
 `re_user3_pack_v3`, which records the independently detected USR outer layout, RSZ
