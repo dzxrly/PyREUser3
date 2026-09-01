@@ -171,6 +171,52 @@ class EnumBinaryTests(unittest.TestCase):
 
         self.assertEqual(bytes(writer.data), bytes.fromhex("00 52 ea b6"))
 
+    def test_erased_fixed_fields_accept_runtime_and_canonical_signed_widths(self):
+        writer_mixin = EnumFieldWriter()
+        cases = (
+            ("S8", "System.SByte", 1, "[255] MinusOne"),
+            ("S16", "System.Int16", 2, "[65535] MinusOne"),
+            ("S32", "System.Int32", 4, "[4294967295] MinusOne"),
+            (
+                "S64",
+                "System.Int64",
+                8,
+                "[18446744073709551615] MinusOne",
+            ),
+        )
+
+        for field_type, original_type, size, unsigned_label in cases:
+            with self.subTest(field_type=field_type):
+                field = FieldDef(
+                    name="_Value_Fixed",
+                    field_type=field_type,
+                    original_type=original_type,
+                    size=size,
+                    align=size,
+                    is_array=False,
+                )
+
+                for label in ("[-1] MinusOne", unsigned_label):
+                    writer = BinaryWriter()
+
+                    writer_mixin._write_scalar(writer, field, label)
+
+                    self.assertEqual(bytes(writer.data), b"\xff" * size)
+
+    def test_signed_field_rejects_values_outside_both_numeric_domains(self):
+        writer_mixin = EnumFieldWriter()
+        field = FieldDef(
+            name="_Value_Fixed",
+            field_type="S8",
+            original_type="System.SByte",
+            size=1,
+            align=1,
+            is_array=False,
+        )
+
+        with self.assertRaisesRegex(PackError, "outside .* S8 range"):
+            writer_mixin._write_scalar(BinaryWriter(), field, "[256] Invalid")
+
     def test_runtime_type_reader_uses_c8_string_layout(self):
         parser = EnumFieldParser()
         reader = BinaryReader(b"\x04\x00\x00\x00abc\x00tail")

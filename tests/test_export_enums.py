@@ -344,6 +344,44 @@ class ExporterEnumSourceMixinTests(unittest.TestCase):
             "app.StageDef.StageID_Fixed",
         )
 
+    def test_enum_context_preserves_digits_from_explicit_property_name(self):
+        dump = {
+            "app.LOD": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.Int32"},
+                    "LOD0": {"default": 0},
+                },
+            },
+            "app.LOD_Fixed": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.Int32"},
+                    "LOD0": {"default": 123},
+                },
+            },
+            "app.Owner": {
+                "fields": {
+                    "_LOD0_Fixed": {"type": "System.Int32"},
+                },
+                "properties": {
+                    "LOD0": {"getter": "get_LOD0"},
+                },
+                "methods": {
+                    "get_LOD0123456": {
+                        "returns": {"type": "app.LOD"},
+                    }
+                },
+            },
+        }
+
+        context = ExporterEnumSourceMixin.export_enum_context_internal(dump)
+
+        self.assertEqual(
+            context["class_field_fixed_types"]["app.Owner"]["_LOD0_Fixed"],
+            "app.LOD_Fixed",
+        )
+
     def test_generic_context_supports_ordinary_enum_wrappers(self):
         dump = {
             "app.Mode": {

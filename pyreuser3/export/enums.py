@@ -374,6 +374,11 @@ class ExporterEnumSourceMixin:
                                 continue
                             if not cls._method_matches_property(method_name, getter):
                                 continue
+                            return_type = cls._method_return_type(method)
+                            if return_type is not None:
+                                runtime_property_types.setdefault(
+                                    prop_name, set()
+                                ).add(return_type)
                             fixed_type = cls._fixed_type_from_method_return(method)
                             if fixed_type is not None:
                                 cls._add_field_fixed_type(
