@@ -54,6 +54,104 @@ class ExporterEnumSourceMixinTests(unittest.TestCase):
             {"v2_Interpolation": "[1] SmoothStep"},
         )
 
+        self.assertEqual(
+            postprocessor._postprocess_enum_nodes(
+                {"v2_Interpolation": 99},
+                current_class="via.ColorRampKey",
+            ),
+            {"v2_Interpolation": 99},
+        )
+
+    def test_postprocess_respects_unsigned_fixed_storage(self):
+        postprocessor = EnumPostprocessor()
+        fixed_type = "app.FieldDef.STAGE_Fixed"
+        postprocessor.enum_lookup[fixed_type] = {
+            3068809728: ("ST101", 3068809728),
+        }
+        postprocessor.enum_underlying_types[fixed_type] = "U32"
+        postprocessor.class_field_fixed_types = {
+            "app.user_data.GrassCullingSetting.cStageData": {
+                "_StageID_Fixed": fixed_type,
+            }
+        }
+
+        self.assertEqual(
+            postprocessor._postprocess_enum_nodes(
+                {"_StageID_Fixed": -1226157568},
+                current_class="app.user_data.GrassCullingSetting.cStageData",
+            ),
+            {"_StageID_Fixed": "[3068809728] ST101"},
+        )
+
+    def test_postprocess_displays_signed_runtime_fixed_id(self):
+        postprocessor = EnumPostprocessor()
+        fixed_type = "app.FieldDef.STAGE_Fixed"
+        postprocessor.enum_lookup[fixed_type] = {
+            3068809728: ("ST101", 3068809728),
+        }
+        postprocessor.enum_underlying_types[fixed_type] = "S32"
+        postprocessor.class_field_fixed_types = {
+            "app.user_data.GrassCullingSetting.cStageData": {
+                "_StageID_Fixed": fixed_type,
+            }
+        }
+
+        self.assertEqual(
+            postprocessor._postprocess_enum_nodes(
+                {"_StageID_Fixed": -1226157568},
+                current_class="app.user_data.GrassCullingSetting.cStageData",
+            ),
+            {"_StageID_Fixed": "[-1226157568] ST101"},
+        )
+
+    def test_repack_keeps_canonical_unsigned_fixed_id(self):
+        postprocessor = EnumPostprocessor()
+        fixed_type = "app.FieldDef.STAGE_Fixed"
+        postprocessor.enum_lookup[fixed_type] = {
+            3068809728: ("ST101", 3068809728),
+        }
+        postprocessor.enum_underlying_types[fixed_type] = "S32"
+        postprocessor.class_field_fixed_types = {
+            "app.user_data.GrassCullingSetting.cStageData": {
+                "_StageID_Fixed": fixed_type,
+            }
+        }
+
+        self.assertEqual(
+            postprocessor._postprocess_enum_nodes(
+                {"_StageID_Fixed": -1226157568},
+                current_class="app.user_data.GrassCullingSetting.cStageData",
+                output_mode="repack",
+            ),
+            {"_StageID_Fixed": "[3068809728] ST101"},
+        )
+
+    def test_unsigned_fixed_type_keeps_unknown_value_as_structured_label(self):
+        postprocessor = EnumPostprocessor()
+        fixed_type = "app.FieldDef.STAGE_Fixed"
+        postprocessor.enum_lookup[fixed_type] = {
+            3068809728: ("ST101", 3068809728),
+        }
+        postprocessor.enum_underlying_types[fixed_type] = "U32"
+
+        self.assertEqual(
+            postprocessor._format_enum_value(fixed_type, -1),
+            "[4294967295] <unknown>",
+        )
+
+    def test_signed_fixed_enum_unknown_value_uses_runtime_fixed_id(self):
+        postprocessor = EnumPostprocessor()
+        fixed_type = "app.StageDef.StageID_Fixed"
+        postprocessor.enum_lookup[fixed_type] = {
+            884165440: ("st200", 884165440),
+        }
+        postprocessor.enum_underlying_types[fixed_type] = "S32"
+
+        self.assertEqual(
+            postprocessor._format_enum_value(fixed_type, -521343680),
+            "[-521343680] <unknown>",
+        )
+
     def test_export_enums_internal_skips_incomplete_enum_entries(self):
         dump = {
             "app.Mode_Fixed": {
@@ -151,6 +249,137 @@ class ExporterEnumSourceMixinTests(unittest.TestCase):
                     "enum_type": "app.Mode_Fixed",
                 }
             },
+        )
+
+    def test_enum_context_infers_integer_fixed_backing_field_from_getter(self):
+        dump = {
+            "app.FieldDef.STAGE": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.Int32"},
+                    "ST101": {"default": 0},
+                },
+            },
+            "app.FieldDef.STAGE_Fixed": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.UInt32"},
+                    "ST101": {"default": 3068809728},
+                },
+            },
+            "app.user_data.GrassCullingSetting.cStageData": {
+                "fields": {
+                    "_StageID_Fixed": {"type": "System.Int32"},
+                },
+                "RSZ": [
+                    {
+                        "potential_name": "_StageID_Fixed",
+                        "type": "System.Int32",
+                    }
+                ],
+                "methods": {
+                    "get_StageID1185265": {
+                        "returns": {"type": "app.FieldDef.STAGE"},
+                    }
+                },
+            },
+        }
+
+        context = ExporterEnumSourceMixin.export_enum_context_internal(dump)
+
+        self.assertEqual(
+            context["class_field_fixed_types"][
+                "app.user_data.GrassCullingSetting.cStageData"
+            ],
+            {"_StageID_Fixed": "app.FieldDef.STAGE_Fixed"},
+        )
+
+    def test_enum_context_does_not_guess_fixed_type_without_enum_pair(self):
+        dump = {
+            "app.FieldDef.STAGE": {
+                "parent": "System.Enum",
+                "fields": {"ST101": {"default": 0}},
+            },
+            "app.Owner": {
+                "fields": {"_StageID_Fixed": {"type": "System.Int32"}},
+                "methods": {
+                    "get_StageID1": {
+                        "returns": {"type": "app.FieldDef.STAGE"},
+                    }
+                },
+            },
+        }
+
+        context = ExporterEnumSourceMixin.export_enum_context_internal(dump)
+
+        self.assertNotIn("app.Owner", context["class_field_fixed_types"])
+
+    def test_enum_context_infers_integer_backing_field_from_fixed_getter(self):
+        dump = {
+            "app.StageDef.StageID_Fixed": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.UInt32"},
+                    "st100": {"default": 1769129856},
+                },
+            },
+            "app.user_data.WindGlobalAnimationData.cData": {
+                "fields": {
+                    "_StageID_Fixed": {"type": "System.Int32"},
+                },
+                "methods": {
+                    "get_StageID_Fixed332574": {
+                        "returns": {"type": "app.StageDef.StageID_Fixed"},
+                    }
+                },
+            },
+        }
+
+        context = ExporterEnumSourceMixin.export_enum_context_internal(dump)
+
+        self.assertEqual(
+            context["class_field_fixed_types"][
+                "app.user_data.WindGlobalAnimationData.cData"
+            ]["_StageID_Fixed"],
+            "app.StageDef.StageID_Fixed",
+        )
+
+    def test_enum_context_preserves_digits_from_explicit_property_name(self):
+        dump = {
+            "app.LOD": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.Int32"},
+                    "LOD0": {"default": 0},
+                },
+            },
+            "app.LOD_Fixed": {
+                "parent": "System.Enum",
+                "fields": {
+                    "value__": {"type": "System.Int32"},
+                    "LOD0": {"default": 123},
+                },
+            },
+            "app.Owner": {
+                "fields": {
+                    "_LOD0_Fixed": {"type": "System.Int32"},
+                },
+                "properties": {
+                    "LOD0": {"getter": "get_LOD0"},
+                },
+                "methods": {
+                    "get_LOD0123456": {
+                        "returns": {"type": "app.LOD"},
+                    }
+                },
+            },
+        }
+
+        context = ExporterEnumSourceMixin.export_enum_context_internal(dump)
+
+        self.assertEqual(
+            context["class_field_fixed_types"]["app.Owner"]["_LOD0_Fixed"],
+            "app.LOD_Fixed",
         )
 
     def test_generic_context_supports_ordinary_enum_wrappers(self):

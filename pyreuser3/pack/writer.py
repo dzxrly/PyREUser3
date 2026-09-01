@@ -20,7 +20,7 @@ from .models import (
     StructValue,
 )
 from ..core import align, enum_storage_size, enum_storage_type_from_size
-from ..enum_codec import ENUM_LABEL_RE
+from ..enum_codec import ENUM_LABEL_RE, normalize_integer_for_storage
 from ..schema import FieldDef
 
 class PackerWriterMixin:
@@ -437,19 +437,28 @@ class PackerWriterMixin:
             writer.write_struct("<B", 1 if bool(value) else 0)
             return
         if t == "S8":
-            writer.write_struct("<b", self._coerce_int(value, field_def))
+            writer.write_struct(
+                "<b",
+                self._coerce_signed_storage(value, field_def, "S8"),
+            )
             return
         if t == "U8":
             writer.write_struct("<B", self._coerce_int(value, field_def) & 0xFF)
             return
         if t == "S16":
-            writer.write_struct("<h", self._coerce_int(value, field_def))
+            writer.write_struct(
+                "<h",
+                self._coerce_signed_storage(value, field_def, "S16"),
+            )
             return
         if t == "U16":
             writer.write_struct("<H", self._coerce_int(value, field_def) & 0xFFFF)
             return
         if t in {"S32", "Sfix"}:
-            writer.write_struct("<i", self._to_s32(self._coerce_int(value, field_def)))
+            writer.write_struct(
+                "<i",
+                self._coerce_signed_storage(value, field_def, "S32"),
+            )
             return
         if t == "Enum":
             self._write_enum_value(writer, field_def, value)
@@ -458,7 +467,10 @@ class PackerWriterMixin:
             writer.write_struct("<I", self._coerce_int(value, field_def) & 0xFFFFFFFF)
             return
         if t == "S64":
-            writer.write_struct("<q", self._coerce_int(value, field_def))
+            writer.write_struct(
+                "<q",
+                self._coerce_signed_storage(value, field_def, "S64"),
+            )
             return
         if t == "U64":
             writer.write_struct(
@@ -616,6 +628,21 @@ class PackerWriterMixin:
             # Follow schema field layout exactly so alignment, padding, and unknown data
             # remain binary-compatible.
             writer.write(b"\x00" * (value.declared_size - consumed))
+
+    def _coerce_signed_storage(
+        self, value: Any, field_def: FieldDef, storage_type: str
+    ) -> int:
+        """Accept a signed runtime value or its canonical unsigned bit pattern."""
+        number = self._coerce_int(value, field_def)
+        bits = int(storage_type[1:])
+        signed_minimum = -(1 << (bits - 1))
+        unsigned_maximum = (1 << bits) - 1
+        if number < signed_minimum or number > unsigned_maximum:
+            raise PackError(
+                f"value {number} is outside the signed or canonical unsigned "
+                f"{storage_type} range for field {field_def.name}"
+            )
+        return normalize_integer_for_storage(number, storage_type)
 
     def _coerce_int(self, value: Any, field_def: FieldDef) -> int:
         """Coerce int.

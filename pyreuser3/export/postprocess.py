@@ -13,6 +13,7 @@ from ..enum_codec import (
     decode_bitset,
     decode_flags,
     enum_member_for_value,
+    normalize_integer_for_storage,
 )
 
 
@@ -68,7 +69,13 @@ class ExporterPostprocessMixin:
                 return candidate
         return type_name
 
-    def _format_enum_value(self, fixed_enum_type: str, value: int) -> Any:
+    def _format_enum_value(
+        self,
+        fixed_enum_type: str,
+        value: int,
+        *,
+        runtime_signedness: bool = True,
+    ) -> Any:
         """Format enum value.
 
         Exact declared members stay intact; flagged enums are decomposed only when the
@@ -97,7 +104,14 @@ class ExporterPostprocessMixin:
         )
         if matched is not None:
             member_name, fixed_value = matched
-            return self._id_formatter(member_name, fixed_value)
+            return self._id_formatter(
+                member_name,
+                self._normalize_enum_display_value(
+                    fixed_enum_type,
+                    fixed_value,
+                    runtime_signedness=runtime_signedness,
+                ),
+            )
         if fixed_enum_type in getattr(self, "enum_flags", set()):
             return decode_flags(
                 self.enum_lookup,
@@ -105,7 +119,37 @@ class ExporterPostprocessMixin:
                 value,
                 getattr(self, "enum_underlying_types", {}),
             )
-        return value
+        if not fixed_enum_type.endswith("_Fixed"):
+            return value
+        return self._id_formatter(
+            "<unknown>",
+            self._normalize_enum_display_value(
+                fixed_enum_type,
+                value,
+                runtime_signedness=runtime_signedness,
+            ),
+        )
+
+    def _normalize_enum_display_value(
+        self,
+        enum_type: str,
+        value: int,
+        *,
+        runtime_signedness: bool,
+    ) -> int:
+        """Normalize IDs to the integer domain exposed by the runtime enum."""
+        storage_type = getattr(self, "enum_underlying_types", {}).get(enum_type)
+        if (
+            not runtime_signedness
+            and enum_type.endswith("_Fixed")
+            and storage_type in {"S8", "S16", "S32", "S64"}
+        ):
+            storage_type = f"U{storage_type[1:]}"
+        return (
+            normalize_integer_for_storage(value, storage_type)
+            if storage_type is not None
+            else value
+        )
 
     @staticmethod
     def _looks_like_class_name(text: str) -> bool:
@@ -427,7 +471,11 @@ class ExporterPostprocessMixin:
         if isinstance(value, int) and scalar_enum_hint is not None:
             # Register enum values through the shared lookup tables so readable labels
             # and numeric packing stay reversible.
-            return self._format_enum_value(scalar_enum_hint, value)
+            return self._format_enum_value(
+                scalar_enum_hint,
+                value,
+                runtime_signedness=output_mode != "repack",
+            )
         return value
 
     def _finalize_export_tree(self, value: Any) -> Any:
