@@ -40,15 +40,15 @@ const I18N={
     connected:"Connected",
     disconnected:"Disconnected",
     dialogIl2cpp:"Select il2cpp_dump.json",
-    dialogInputDirectory:"Select a directory containing .user.3 files",
-    dialogInputFile:"Select a .user.3 file",
+    dialogInputDirectory:"Select a directory containing .user.3 files or variants",
+    dialogInputFile:"Select a .user.3 or .user.3.* file",
     dialogOutputDirectory:"Select a JSON output directory",
     dialogSchema:"Select an RE_RSZ schema JSON",
     errorLabel:"Error",
     excludeRegexes:"Exclude Regexes",
     exportPanel:"Export .user.3 to JSON",
-    inputPath:"Input Directory or .user.3 File",
-    inputPathPlaceholder:"Select a directory or .user.3 file",
+    inputPath:"Input Directory or User3 File",
+    inputPathPlaceholder:"Select a directory, .user.3, or .user.3.* file",
     jobExport:"Export",
     jobs:"Jobs",
     jsonFiles:"JSON files",
@@ -69,10 +69,10 @@ const I18N={
     statusFailed:"Failed",
     statusQueued:"Queued",
     statusRunning:"Running",
-    subtitle:"Exports .user.3 files to JSON. Select all paths with the picker buttons.",
+    subtitle:"Exports .user.3 and .user.3.* files to JSON. Select all paths with the picker buttons.",
     taskKindExport:"Export job",
     treeDepth:"Tree Depth",
-    user3Files:"user3 files",
+    user3Files:"user3 files and variants",
     userMagic:"USR magic"
   },
   zh:{
@@ -83,15 +83,15 @@ const I18N={
     connected:"已连接",
     disconnected:"连接中断",
     dialogIl2cpp:"选择 il2cpp_dump.json",
-    dialogInputDirectory:"选择包含 .user.3 的目录",
-    dialogInputFile:"选择 .user.3 文件",
+    dialogInputDirectory:"选择包含 .user.3 或其变体的目录",
+    dialogInputFile:"选择 .user.3 或 .user.3.* 文件",
     dialogOutputDirectory:"选择 JSON 输出目录",
     dialogSchema:"选择 RE_RSZ 模板 JSON",
     errorLabel:"错误",
     excludeRegexes:"排除正则",
     exportPanel:"导出 .user.3 为 JSON",
-    inputPath:"输入目录或 .user.3 文件",
-    inputPathPlaceholder:"请选择目录或 .user.3 文件",
+    inputPath:"输入目录或 User3 文件",
+    inputPathPlaceholder:"请选择目录、.user.3 或 .user.3.* 文件",
     jobExport:"导出",
     jobs:"任务",
     jsonFiles:"JSON 文件",
@@ -112,10 +112,10 @@ const I18N={
     statusFailed:"失败",
     statusQueued:"排队",
     statusRunning:"运行中",
-    subtitle:"支持将 .user.3 解包导出为 JSON，所有路径请通过选择按钮指定。",
+    subtitle:"支持将 .user.3 和 .user.3.* 解包导出为 JSON，所有路径请通过选择按钮指定。",
     taskKindExport:"解包任务",
     treeDepth:"树深度",
-    user3Files:"user3 文件",
+    user3Files:"user3 文件及变体",
     userMagic:"USR magic"
   }
 } as const;
@@ -285,7 +285,7 @@ INDEX_HTML = (
         <div class="head"><h2>{{ t("exportPanel") }}</h2><span class="muted">{{ t("taskKindExport") }}</span></div>
         <form class="form" @submit.prevent="submitExport">
           <div class="grid">
-            <div class="field wide"><label>{{ t("inputPath") }}</label><div class="path-row"><input v-model="exportForm.inputDir" readonly :placeholder="t('inputPathPlaceholder')"><button class="secondary" type="button" @click="pickPath(exportForm,'inputDir','directory',t('dialogInputDirectory'))">{{ t("browseDirectory") }}</button><button class="secondary" type="button" @click="pickPath(exportForm,'inputDir','file',t('dialogInputFile'),[[t('user3Files'),'*.user.3'],[t('allFiles'),'*.*']])">{{ t("browseFile") }}</button></div></div>
+            <div class="field wide"><label>{{ t("inputPath") }}</label><div class="path-row"><input v-model="exportForm.inputDir" readonly :placeholder="t('inputPathPlaceholder')"><button class="secondary" type="button" @click="pickPath(exportForm,'inputDir','directory',t('dialogInputDirectory'))">{{ t("browseDirectory") }}</button><button class="secondary" type="button" @click="pickPath(exportForm,'inputDir','file',t('dialogInputFile'),[[t('user3Files'),'*.user.3 *.user.3.*'],[t('allFiles'),'*.*']])">{{ t("browseFile") }}</button></div></div>
             <div class="field wide"><label>{{ t("schema") }}</label><div class="path-row"><input v-model="exportForm.schemaPath" readonly :placeholder="t('schemaPlaceholder')"><button class="secondary" type="button" @click="pickPath(exportForm,'schemaPath','file',t('dialogSchema'),[[t('jsonFiles'),'*.json'],[t('allFiles'),'*.*']])">{{ t("browseFile") }}</button></div></div>
             <div class="field wide"><label>{{ t("jsonOutput") }}</label><div class="path-row"><input v-model="exportForm.outputDir" readonly :placeholder="t('jsonOutputPlaceholder')"><button class="secondary" type="button" @click="pickPath(exportForm,'outputDir','directory',t('dialogOutputDirectory'))">{{ t("browseDirectory") }}</button></div></div>
             <div class="field wide"><label>il2cpp_dump.json</label><div class="path-row"><input v-model="exportForm.il2cppDumpPath" readonly :placeholder="t('dialogIl2cpp')"><button class="secondary" type="button" @click="pickPath(exportForm,'il2cppDumpPath','file',t('dialogIl2cpp'),[[t('jsonFiles'),'*.json'],[t('allFiles'),'*.*']])">{{ t("browseFile") }}</button></div></div>

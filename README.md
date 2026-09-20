@@ -27,7 +27,7 @@ from pyreuser3 import REUser3Converter
 
 ## What Is Included
 
-- `.user.3 -> JSON` export.
+- `.user.3` and decorated `.user.3.*` (for example `.user.3.X64`) export.
 - `JSON -> .user.3` packing.
 - A reusable Python API through `REUser3Converter`.
 - CLI commands through `pyreuser3`.
@@ -41,8 +41,8 @@ or repository-specific helper scripts.
 
 - Python 3.9 or newer.
 - A RE_RSZ schema JSON file for the target game/version.
-- An `il2cpp_dump.json` file when exporting readable enum labels.
-- One or more unpacked `.user.3` files.
+- An `il2cpp_dump.json` file when exporting readable enum labels and validated native structures.
+- One or more unpacked `.user.3` or `.user.3.*` files.
 
 Layout probing is the exception: `pyreuser3 probe` only inspects the USR/RSZ
 container and does not require a schema or `il2cpp_dump.json`.
@@ -78,7 +78,9 @@ pyreuser3 pack \
   -p <il2cpp_dump.json>
 ```
 
-The `-p/--il2cpp-dump-path` option is required for export and optional for pack. Passing it during pack is recommended when enum names need to be resolved back to numeric values.
+The `-p/--il2cpp-dump-path` option is required for export and optional for pack. Pass it
+during pack when enum names or readable native structures need to be resolved back to
+binary values. Legacy `{"raw": "..."}` structure values remain packable without it.
 
 Probe a file or directory without loading game metadata:
 
@@ -99,7 +101,9 @@ Start the local `.user.3` export Web UI:
 pyreuser3-web --port 8765
 ```
 
-The Web UI only handles `.user.3` export. It does not pack files.
+The Web UI handles `.user.3` and `.user.3.*` export. It does not pack files.
+Its **Tree Depth** field accepts `auto` or a non-negative integer; an explicit
+integer is passed through to readable reference-tree expansion.
 
 ## Python API
 
@@ -190,6 +194,16 @@ Experimental physical H28 and legacy RSZ v3 candidates are read-only until real
 fixtures validate byte-for-byte repacking. V1 and v2 documents are recognized for
 diagnostics but must be re-exported as v3 before packing because they do not record
 the required layout metadata.
+
+Fixed-width RE Engine value types use a game-independent, declarative codec registry.
+The first supported codecs are `via.Int2`, `via.Uint2`, `via.Range`, `via.RangeI`,
+and `via.Sphere`, including scalar and array fields. A codec is enabled only when the
+active il2cpp dump exactly validates the value type's parent, boxed size, member types,
+and member offsets, and the schema independently agrees on the original type and payload
+size. Matching values are exported as named JSON objects, for example
+`{"x": 10, "y": 20}` or `{"pos": [1.0, 2.0, 3.0], "r": 4.0}`.
+Any absent or mismatched signature fails closed to the existing raw representation;
+legacy raw scalar and array JSON remains accepted for lossless repacking.
 
 Modern files may use signed `-1` as an explicit null `Object` reference; repack
 preserves that sentinel while continuing to reject every other missing instance

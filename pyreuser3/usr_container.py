@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from .core import ParseError, RSZ_MAGIC, USR_MAGIC
+from .core import ParseError, RSZ_MAGIC, USR_MAGIC, discover_user3_files
 from .usr_layouts import (
     RSZ_HEADER_LAYOUTS,
     USR_LAYOUTS,
@@ -556,14 +556,10 @@ def probe_usr_path(
 
     policy = _normalize_policy(policy)
     source_root = Path(root)
-    if source_root.is_file():
-        files = [source_root]
-    elif source_root.is_dir():
-        files = sorted(source_root.rglob("*.user.3"))
-    else:
-        raise FileNotFoundError(f"probe input not found: {source_root}")
-    if not files:
-        raise FileNotFoundError(f"no *.user.3 found under: {source_root}")
+    try:
+        files = discover_user3_files(source_root)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"probe input not found or empty: {source_root}") from exc
 
     layouts: Counter[str] = Counter()
     versions: Counter[str] = Counter()

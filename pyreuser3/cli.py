@@ -105,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-dir",
         "-i",
         required=True,
-        help="Root directory or single .user.3 file to export.",
+        help="Root directory or single .user.3 / .user.3.* file to export.",
     )
     export_parser.add_argument(
         "--schema-path",
@@ -139,7 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--il2cpp-dump-path",
         "-p",
         required=True,
-        help="Path to il2cpp_dump.json, used to generate enum labels.",
+        help=(
+            "Path to il2cpp_dump.json, used for enum labels and validated "
+            "native structures."
+        ),
     )
     export_parser.add_argument(
         "--json-format",
@@ -178,7 +181,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--il2cpp-dump-path",
         "-p",
         default="",
-        help="Optional il2cpp_dump.json path, used for enum name lookup.",
+        help=(
+            "Optional il2cpp_dump.json path, used for enum lookup and readable "
+            "native structures."
+        ),
     )
     pack_parser.add_argument(
         "--exclude-regex",
@@ -198,7 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--input-dir",
         "-i",
         required=True,
-        help="Root directory or single .user.3 file to inspect.",
+        help="Root directory or single .user.3 / .user.3.* file to inspect.",
     )
     probe_parser.add_argument(
         "--json-report",

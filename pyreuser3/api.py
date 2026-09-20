@@ -14,7 +14,12 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
-from .core import RSZ_MAGIC, USR_MAGIC, resolve_schema_path
+from .core import (
+    RSZ_MAGIC,
+    USR_MAGIC,
+    discover_user3_files,
+    resolve_schema_path,
+)
 from .export import User3Exporter
 from .pack import User3Packer
 from .schema import TypeDB
@@ -547,14 +552,7 @@ class REUser3Converter:
         Raises:
             FileNotFoundError: A required file or directory was missing.
         """
-        if user3_root.is_file():
-            return [user3_root]
-        if not user3_root.is_dir():
-            raise FileNotFoundError(f"user3 root not found: {user3_root}")
-        files = sorted(user3_root.rglob("*.user.3"))
-        if not files:
-            raise FileNotFoundError(f"no *.user.3 found under: {user3_root}")
-        return files
+        return discover_user3_files(user3_root)
 
     @staticmethod
     def _run_callback(

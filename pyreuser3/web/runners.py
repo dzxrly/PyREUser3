@@ -73,6 +73,7 @@ class ConversionRunners:
         log(f"Input: {input_dir}")
         log(f"Schema: {schema_path}")
         log(f"Output: {output_dir}")
+        log(f"Tree depth: {tree_depth}")
         if exclude_regexes:
             log(f"Exclude regexes: {len(exclude_regexes)}")
 
@@ -89,13 +90,18 @@ class ConversionRunners:
             il2cpp_dump_path=il2cpp_dump_path,
             user_magic=user_magic,
             rsz_magic=rsz_magic,
+            json_format="readable",
         )
         user3_result = exporter.run()
         log(f".user.3 export complete: {json.dumps(user3_result, ensure_ascii=False)}")
 
         # Keep the local HTTP and frontend behavior explicit because the Web UI runs
         # without a separate framework.
-        return {"user3": user3_result, "outputDir": str(output_dir)}
+        return {
+            "user3": user3_result,
+            "outputDir": str(output_dir),
+            "treeDepth": tree_depth,
+        }
 
     def _path_value(self, payload: dict[str, Any], key: str, label: str) -> Path:
         """Read and validate an absolute filesystem path from a Web form payload.

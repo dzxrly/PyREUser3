@@ -12,6 +12,7 @@ from typing import Any
 
 from ..core import ParseError, enum_storage_type_from_size
 from ..enum_codec import enum_member_for_value, is_probable_flags_enum
+from ..native_structs import normalize_native_struct_layouts
 from ..rich_ui import get_console
 
 
@@ -242,7 +243,12 @@ class ExporterMetadataMixin:
         self.bitset_rules = {}
         self.param_type_default_enum = {}
         self.enum_underlying_types = {}
+        self.native_struct_layouts = {}
         self.enum_flags = set()
+
+        self.native_struct_layouts = normalize_native_struct_layouts(
+            raw.get("native_struct_layouts")
+        )
 
         class_field_fixed_types = raw.get("class_field_fixed_types")
         if isinstance(class_field_fixed_types, dict):

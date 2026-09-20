@@ -18,9 +18,16 @@ from .models import (
 )
 from .plan import PackerPlanMixin
 from .writer import PackerWriterMixin
-from ..core import PACK_JSON_FORMATS, RSZ_MAGIC, USR_MAGIC, resolve_schema_path
+from ..core import (
+    PACK_JSON_FORMATS,
+    RSZ_MAGIC,
+    USR_MAGIC,
+    is_user3_source_path,
+    resolve_schema_path,
+)
 from ..enum_codec import is_probable_flags_enum
 from ..export import User3Exporter
+from ..native_structs import normalize_native_struct_layouts
 from ..rich_ui import BatchProgress
 from ..schema import TypeDB
 
@@ -77,6 +84,7 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         # Register enum values through the shared lookup tables so readable labels and
         # numeric packing stay reversible.
         self.enum_underlying_types: dict[str, str] = {}
+        self.native_struct_layouts: dict[str, dict] = {}
         self.bitset_rules: dict[str, str] = {}
         self.class_default_enums: dict[str, str] = {}
         self.enum_lookup = self._load_enum_lookup()
@@ -147,12 +155,18 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
                 raise FileNotFoundError(f"json root not found: {source_root}")
             # Only documents that explicitly identify themselves as repack JSON are
             # candidates. Readable exports are never sent to the packer.
-            named_pack_files = set(source_root.rglob("*.user.3.pack.json"))
+            all_json_files = set(source_root.rglob("*.json"))
+            named_pack_files = {
+                path
+                for path in all_json_files
+                if path.name.casefold().endswith(".pack.json")
+                and is_user3_source_path(path.name[: -len(".pack.json")])
+            }
             files = sorted(
                 named_pack_files
                 | {
                     path
-                    for path in source_root.rglob("*.json")
+                    for path in all_json_files
                     if path not in named_pack_files and self._is_repack_json_file(path)
                 }
             )
@@ -246,9 +260,13 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
         name = json_file.name
         # Preserve the exported JSON structure so external scripts and hand-edited files
         # remain compatible across workflows.
-        if name.endswith(".user.3.pack.json"):
+        if name.casefold().endswith(".pack.json") and is_user3_source_path(
+            name[: -len(".pack.json")]
+        ):
             output_name = name[: -len(".pack.json")]
-        elif name.endswith(".user.3.json"):
+        elif name.casefold().endswith(".json") and is_user3_source_path(
+            name[: -len(".json")]
+        ):
             output_name = name[: -len(".json")]
         elif name.endswith(".json"):
             output_name = f"{name[: -len('.json')]}.user.3"
@@ -290,6 +308,10 @@ class User3Packer(PackerPlanMixin, PackerWriterMixin):
             )
         else:
             enum_context = {}
+        if isinstance(enum_context, dict):
+            self.native_struct_layouts = normalize_native_struct_layouts(
+                enum_context.get("native_struct_layouts")
+            )
         if isinstance(raw, dict):
             enum_underlying_types = enum_context.get("enum_underlying_types")
             if isinstance(enum_underlying_types, dict):

@@ -10,7 +10,7 @@ pip install pyreuser3
 
 ## What Is Included
 
-- `.user.3 -> JSON` export.
+- `.user.3` and decorated `.user.3.*` export.
 - `JSON -> .user.3` packing.
 - A reusable Python API through `REUser3Converter`.
 - CLI commands through `pyreuser3`.
@@ -18,6 +18,8 @@ pip install pyreuser3
 - A local `.user.3` export Web UI through `pyreuser3-web`.
 - Automatic separation of the USR outer layout from the embedded RSZ header family;
   modern RSZ v4+ files preserve their original numeric version during repack.
+- il2cpp-validated readable codecs for `via.Int2`, `via.Uint2`, `via.Range`,
+  `via.RangeI`, and `via.Sphere`, with scalar/array round trips and raw fallback.
 
 The published package intentionally does not include game resources, dumped game data, RE_RSZ templates,
 `il2cpp_dump.json`, or repository-specific helper scripts. You need to provide data files that match the target game and
@@ -38,8 +40,8 @@ of Python scalar objects.
 
 - Python 3.9 or newer.
 - A RE_RSZ schema JSON file for the target game/version.
-- An `il2cpp_dump.json` file when exporting readable enum labels.
-- One or more unpacked `.user.3` files.
+- An `il2cpp_dump.json` file when exporting readable enum labels and validated native structures.
+- One or more unpacked `.user.3` or `.user.3.*` files.
 
 `pyreuser3 probe` does not require a schema or `il2cpp_dump.json`.
 

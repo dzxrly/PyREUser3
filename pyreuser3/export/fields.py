@@ -18,6 +18,11 @@ from ..core import (
     enum_storage_size,
     enum_storage_type_from_size,
 )
+from ..native_structs import (
+    NativeStructValueError,
+    decode_native_struct,
+    resolve_native_struct_codec,
+)
 from ..schema import ClassDef, FieldDef
 
 
@@ -140,6 +145,18 @@ class ExporterFieldParserMixin:
             # the declared field size determines the component count.
             count = max(field.size // 4, 1)
             return [reader.read_f32() for _ in range(count)]
+
+        codec = resolve_native_struct_codec(
+            field, getattr(self, "native_struct_layouts", {})
+        )
+        if codec is not None and reader.size - reader.tell() >= codec.payload_size:
+            payload = reader.read(codec.payload_size)
+            try:
+                return decode_native_struct(codec, payload)
+            except NativeStructValueError:
+                # Non-finite float payloads and any future non-lossless cases stay raw
+                # so a JSON round trip cannot silently alter their bit patterns.
+                return {"raw": payload.hex(), "type": t}
 
         if field.size <= 0:
             return None
