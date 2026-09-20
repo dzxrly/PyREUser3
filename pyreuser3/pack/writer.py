@@ -15,12 +15,14 @@ from .models import (
     ExternalUserdataSpec,
     InstanceRef,
     InstanceSpec,
+    NativeStructValue,
     PackError,
     RawArrayValue,
     StructValue,
 )
 from ..core import align, enum_storage_size, enum_storage_type_from_size
 from ..enum_codec import ENUM_LABEL_RE, normalize_integer_for_storage
+from ..native_structs import registered_native_struct_codec
 from ..schema import FieldDef
 
 class PackerWriterMixin:
@@ -432,6 +434,20 @@ class PackerWriterMixin:
         Returns:
             None. The method performs its documented side effect in place and raises on invalid input.
         """
+        registered_codec = registered_native_struct_codec(field_def)
+        if isinstance(value, NativeStructValue):
+            if registered_codec is None or value.type_name != registered_codec.il2cpp_type:
+                raise PackError(
+                    f"native structure payload type does not match field {field_def.name!r}"
+                )
+            if len(value.payload) != field_def.size:
+                raise PackError(
+                    f"native structure {field_def.name!r} payload has "
+                    f"{len(value.payload)} bytes, expected {field_def.size}"
+                )
+            writer.write(value.payload)
+            return
+
         t = field_def.field_type
         if t == "Bool":
             writer.write_struct("<B", 1 if bool(value) else 0)
@@ -545,8 +561,18 @@ class PackerWriterMixin:
         if isinstance(value, dict) and isinstance(value.get("raw"), str):
             # Follow schema field layout exactly so alignment, padding, and unknown data
             # remain binary-compatible.
-            writer.write(bytes.fromhex(value["raw"]))
+            payload = bytes.fromhex(value["raw"])
+            if registered_codec is not None and len(payload) != field_def.size:
+                raise PackError(
+                    f"native structure {field_def.name!r} raw payload has "
+                    f"{len(payload)} bytes, expected {field_def.size}"
+                )
+            writer.write(payload)
             return
+        if registered_codec is not None:
+            raise PackError(
+                f"native structure {field_def.name!r} was not validated during planning"
+            )
         # Follow schema field layout exactly so alignment, padding, and unknown data
         # remain binary-compatible.
         writer.write(b"\x00" * max(field_def.size, 0))

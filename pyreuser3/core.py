@@ -32,6 +32,7 @@ HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 # Register enum values through the shared lookup tables so readable labels and numeric
 # packing stay reversible.
 ENUM_UNUSED_KEY = "value__"
+USER3_NAME_MARKER = ".user.3"
 
 ENUM_UNDERLYING_TYPE_MAP = {
     "byte": "U8",
@@ -74,6 +75,48 @@ class ParseError(RuntimeError):
     """
 
     pass
+
+
+def is_user3_source_path(path: str | Path) -> bool:
+    """Return whether a filename is a binary ``.user.3`` source variant.
+
+    RE Engine resources may append platform or build qualifiers after the normal
+    suffix, for example ``foo.user.3.X64``.  Generated JSON files deliberately do
+    not qualify, even though their names retain the source filename.
+    """
+
+    name = Path(path).name.casefold()
+    marker_index = name.rfind(USER3_NAME_MARKER)
+    if marker_index < 0 or name.endswith(".json"):
+        return False
+    tail = name[marker_index + len(USER3_NAME_MARKER) :]
+    return not tail or tail.startswith(".")
+
+
+def discover_user3_files(root: str | Path) -> list[Path]:
+    """Discover standard and decorated ``.user.3`` files below a root path.
+
+    An explicitly supplied file is preserved for backward compatibility.  Directory
+    discovery accepts both ``*.user.3`` and ``*.user.3.*`` (case-insensitively), while
+    excluding generated ``*.json`` export and pack documents.
+    """
+
+    source_root = Path(root)
+    if source_root.is_file():
+        return [source_root]
+    if not source_root.is_dir():
+        raise FileNotFoundError(f"user3 root not found: {source_root}")
+
+    files = sorted(
+        path
+        for path in source_root.rglob("*")
+        if path.is_file() and is_user3_source_path(path)
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"no .user.3 or .user.3.* files found under: {source_root}"
+        )
+    return files
 
 
 def align(value: int, alignment: int) -> int:

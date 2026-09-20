@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import ENUM_UNUSED_KEY, normalize_enum_storage_type
+from ..native_structs import collect_validated_native_struct_layout
 
 
 _FIXED_ENUM_RE = re.compile(r"[A-Za-z0-9_.+]+_Fixed")
@@ -298,6 +299,7 @@ class ExporterEnumSourceMixin:
             "bitset_rules": {},
             "generic_candidates": {},
             "enum_underlying_types": {},
+            "native_struct_layouts": {},
             "enum_types": set(),
             "serializable_fallback_candidates": [],
             "fixed_backing_candidates": [],
@@ -310,6 +312,11 @@ class ExporterEnumSourceMixin:
         """Collect enum context from one top-level il2cpp class entry."""
         if not isinstance(class_name, str) or not isinstance(obj, dict):
             return
+
+        native_layout = collect_validated_native_struct_layout(class_name, obj)
+        if native_layout is not None:
+            type_name, descriptor = native_layout
+            state["native_struct_layouts"][type_name] = descriptor
 
         if obj.get("parent") == "System.Enum":
             state["enum_types"].add(class_name)
@@ -521,6 +528,7 @@ class ExporterEnumSourceMixin:
             "generic_scalar_rules": state["generic_scalar_rules"],
             "bitset_rules": state["bitset_rules"],
             "enum_underlying_types": state["enum_underlying_types"],
+            "native_struct_layouts": state["native_struct_layouts"],
         }
 
     @classmethod

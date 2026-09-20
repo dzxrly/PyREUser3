@@ -8,8 +8,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import InstanceRef, PackError, RawArrayValue, StructValue
+from .models import (
+    InstanceRef,
+    NativeStructValue,
+    PackError,
+    RawArrayValue,
+    StructValue,
+)
 from ..enum_codec import bitset_enum_type, encode_bitset, encode_flags
+from ..native_structs import (
+    NativeStructCodec,
+    NativeStructValueError,
+    encode_native_struct,
+    registered_native_struct_codec,
+    resolve_native_struct_codec,
+)
 from ..schema import ClassDef, FieldDef
 
 
@@ -82,11 +95,60 @@ class PackerValueMixin:
             )
             return [self._prepare_field_value(non_array, item) for item in items]
 
+        registered_codec = registered_native_struct_codec(field_def)
+        if registered_codec is not None:
+            return self._prepare_native_struct_value(
+                field_def, raw_value, registered_codec
+            )
         if field_def.field_type in {"Object", "UserData"}:
             return self._prepare_object_ref(field_def, raw_value)
         if field_def.field_type == "Struct":
             return self._prepare_struct_value(field_def, raw_value)
         return raw_value
+
+    def _prepare_native_struct_value(
+        self,
+        field_def: FieldDef,
+        raw_value: Any,
+        registered_codec: NativeStructCodec,
+    ) -> NativeStructValue:
+        """Prepare a structured value or a legacy raw JSON payload safely."""
+
+        if isinstance(raw_value, dict) and "raw" in raw_value:
+            payload_hex = raw_value.get("raw")
+            if not isinstance(payload_hex, str):
+                raise PackError(
+                    f"native structure {field_def.name!r} raw payload must be "
+                    "hexadecimal text"
+                )
+            try:
+                payload = bytes.fromhex(payload_hex)
+            except ValueError as exc:
+                raise PackError(
+                    f"native structure {field_def.name!r} raw payload is not valid "
+                    "hexadecimal text"
+                ) from exc
+            if len(payload) != field_def.size:
+                raise PackError(
+                    f"native structure {field_def.name!r} raw payload has "
+                    f"{len(payload)} bytes, expected {field_def.size}"
+                )
+            return NativeStructValue(registered_codec.il2cpp_type, payload)
+
+        codec = resolve_native_struct_codec(
+            field_def, getattr(self, "native_struct_layouts", {})
+        )
+        if codec is None:
+            raise PackError(
+                f"structured value for {field_def.original_type!r} is disabled because "
+                "the active il2cpp dump did not validate its exact layout; use the "
+                "legacy raw form instead"
+            )
+        try:
+            payload = encode_native_struct(codec, raw_value)
+        except NativeStructValueError as exc:
+            raise PackError(str(exc)) from exc
+        return NativeStructValue(codec.il2cpp_type, payload)
 
     @staticmethod
     def _prepare_raw_array(
@@ -248,6 +310,8 @@ class PackerValueMixin:
 
         if field_def.is_array:
             return []
+        if registered_native_struct_codec(field_def) is not None:
+            return {"raw": "00" * field_def.size, "type": field_def.field_type}
         if field_def.field_type == "Bool":
             return False
         if field_def.field_type in {"F32", "F64"}:

@@ -39,6 +39,14 @@ class RawArrayValue:
     payload: bytes
 
 
+@dataclass(frozen=True)
+class NativeStructValue:
+    """Hold one validated fixed-width native value-type payload."""
+
+    type_name: str
+    payload: bytes
+
+
 @dataclass
 class StructValue:
     """Hold a schema class definition and prepared field values for an inline struct payload.

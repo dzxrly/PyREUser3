@@ -29,7 +29,7 @@ from pyreuser3 import REUser3Converter
 
 PyREUser3 当前提供：
 
-- `.user.3 -> JSON` 导出；
+- `.user.3` 以及 `.user.3.X64` 这类 `.user.3.*` 变体导出；
 - `JSON -> .user.3` 封包；
 - 面向其他项目调用的 `REUser3Converter` Python API；
 - `pyreuser3` 命令行工具；
@@ -42,8 +42,8 @@ PyPI 包不会包含游戏资源、游戏 dump、RE_RSZ 模板、`il2cpp_dump.js
 
 - Python 3.9 或更高版本；
 - 与目标游戏和版本匹配的 RE_RSZ schema JSON；
-- 导出可读枚举标签时需要 `il2cpp_dump.json`；
-- 一个或多个已解包的 `.user.3` 文件。
+- 导出可读枚举标签和经验证的原生结构时需要 `il2cpp_dump.json`；
+- 一个或多个已解包的 `.user.3` 或 `.user.3.*` 文件。
 
 布局探测是例外：`pyreuser3 probe` 只检查 USR/RSZ 容器，不需要 schema 或
 `il2cpp_dump.json`。
@@ -82,7 +82,8 @@ pyreuser3 pack \
 说明：
 
 - `export` 时 `-p/--il2cpp-dump-path` 是必填项，用于生成可读枚举标签；
-- `pack` 时 `-p/--il2cpp-dump-path` 是可选项，但如果 JSON 中包含枚举名称，建议传入；
+- `pack` 时 `-p/--il2cpp-dump-path` 是可选项；如果 JSON 中包含枚举名称或可读原生结构，
+  需要传入。旧版 `{"raw": "..."}` 结构值无需 il2cpp 仍可封回；
 - `-s/--schema-path` 必须指向具体 schema JSON 文件，不应传目录；
 - `-i`、`-j` 都可以传单个文件或目录，目录会递归处理。
 
@@ -116,6 +117,9 @@ pyreuser3 export \
 ```bash
 pyreuser3-web --port 8765
 ```
+
+Web 界面的“树深度”可填写 `auto` 或非负整数；显式整数会直接用于 readable
+引用树展开。
 
 默认地址：
 
@@ -204,6 +208,13 @@ API 则把它们报告为结构化警告；repack 导出会把同一诊断写入
 `_unsupported` 阻止未经验证的布局被封回。实验性的物理 H28 与 legacy RSZ v3 候选暂时只读，
 获得真实样本并完成逐字节回封验证后才能启用 repack。v1 和 v2 文档仍可识别以便诊断，但由于
 缺少必要的布局元数据，封回前必须从源文件重新导出为 v3。
+
+定长 RE Engine 值类型由与游戏无关的声明式 codec 注册表处理。首批支持
+`via.Int2`、`via.Uint2`、`via.Range`、`via.RangeI` 和 `via.Sphere`，同时覆盖标量与数组。
+只有当前 il2cpp dump 精确验证其值类型父类、boxed size、成员类型和成员偏移，并且 schema
+中的原始类型与 payload size 也一致时，codec 才会启用。匹配的数据会导出为命名 JSON 对象，
+例如 `{"x": 10, "y": 20}` 或 `{"pos": [1.0, 2.0, 3.0], "r": 4.0}`。
+签名缺失或不匹配时会保守退回原有 raw 表示；旧版 raw 标量与数组 JSON 继续支持无损封回。
 
 部分现代文件会用有符号 `-1` 明确表示空 `Object` 引用；repack 会原样保留这个哨兵，同时继续
 拒绝其他不存在的实例 ID。超过一百万项的定长数组会紧凑保存为 `_raw_array_count` 和

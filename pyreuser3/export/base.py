@@ -16,7 +16,12 @@ from .metadata import ExporterMetadataMixin
 from .postprocess import ExporterPostprocessMixin
 from .tree import ExporterTreeMixin
 from .user3 import ExporterUser3ParserMixin
-from ..core import RSZ_MAGIC, USR_MAGIC, resolve_schema_path
+from ..core import (
+    RSZ_MAGIC,
+    USR_MAGIC,
+    discover_user3_files,
+    resolve_schema_path,
+)
 from ..rich_ui import BatchProgress
 from ..schema import TypeDB
 
@@ -106,6 +111,7 @@ class User3Exporter(
         self.bitset_rules: dict[str, str] = {}
         self.param_type_default_enum: dict[str, str] = {}
         self.enum_underlying_types: dict[str, str] = {}
+        self.native_struct_layouts: dict[str, dict] = {}
         self.enum_flags: set[str] = set()
         self.enum_member_to_types: dict[str, list[str]] = {}
         self._pending_enum_context: dict | None = None
@@ -139,7 +145,7 @@ class User3Exporter(
         with BatchProgress(
             "Exporting user3", total=len(files), unit="file"
         ) as progress:
-            progress.log(f"Found {len(files)} .user.3 file(s).")
+            progress.log(f"Found {len(files)} user3 source file(s).")
             progress.log(f"Schema: {self.schema_path}")
             progress.log(f"Output directory: {self.output_root}")
             for user3_file in files:
@@ -237,14 +243,7 @@ class User3Exporter(
         Raises:
             FileNotFoundError: A required file or directory was missing.
         """
-        if self.user3_root.is_file():
-            files = [self.user3_root]
-        else:
-            if not self.user3_root.is_dir():
-                raise FileNotFoundError(f"user3 root not found: {self.user3_root}")
-            files = sorted(self.user3_root.rglob("*.user.3"))
-            if not files:
-                raise FileNotFoundError(f"no *.user.3 found under: {self.user3_root}")
+        files = discover_user3_files(self.user3_root)
         if not self._exclude_patterns:
             return files
 
@@ -260,7 +259,9 @@ class User3Exporter(
                 continue
             kept.append(file_path)
         if not kept:
-            raise FileNotFoundError("all *.user.3 files were excluded by regex filters")
+            raise FileNotFoundError(
+                "all .user.3 and .user.3.* files were excluded by regex filters"
+            )
         return kept
 
     def _output_path_for(self, user3_file: Path) -> Path:
