@@ -30,7 +30,7 @@
     <rect width="90" height="24" rx="7" fill="#111827" stroke="#25324A"/>
     <circle cx="13" cy="12" r="4" fill="#FACC15"/>
     <text x="24" y="16" fill="#94A3B8" font-family="Segoe UI, Arial, sans-serif" font-size="10" font-weight="700">Stars</text>
-    <text x="80" y="16" text-anchor="end" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="800">2</text>
+    <text x="80" y="16" text-anchor="end" fill="#F8FAFC" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="800">3</text>
   </g>
 
   <g transform="translate(186 56)">
